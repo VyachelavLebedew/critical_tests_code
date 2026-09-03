@@ -1,0 +1,62 @@
+USER GUIDE
+
+This window computes the temperature and density reactivity coefficients -
+ITC and DRDY. Here you select the interval and read the results; the three
+techniques and the formulas are described in the General manual.
+
+
+1. What is on screen
+
+On the left is the plot of the experiment: reactivity (blue), group position
+(green) and temperature (red). On the right is the results table. The
+splitter between them adjusts their size.
+
+
+2. Selecting the interval
+
+A left click on the plot sets the left bound of the interval; a right click
+sets the right bound. The temperature and reactivity at both points, and the
+ΔT and ΔR over the interval, appear in the lower-right part of the window -
+a quick estimate of the ITC before computing.
+
+To change the reactivity unit, use the checkbox below the plot: when it is
+ticked, reactivity is shown in "%"; the current unit is written to its left.
+
+Once a valid interval is set, "Proceed" becomes active. Pressing it computes
+the coefficients by the three techniques and fills the table. DRDY is
+computed only if the boric acid concentration was given; a deviation is shown
+only if the matching reference value was entered, otherwise the cell reads
+"None".
+
+
+3. The results table
+
+    • Rows "Technique 1/2/3" - the ITC and DRDY of each technique.
+    • Row "Result" - the mean coefficients and their deviations from the
+      reference values (or "None").
+    • Row "Computed values" - the reference values; the last cell is the
+      boric acid concentration.
+    • Rows "2 sigma (ITC)" and "2 sigma (DRDY)" - the uncertainties.
+    • Row "Units" - the unit of each column.
+    • Row "Group position" - the group position at the calculation.
+
+
+4. Saving
+
+The "Save" button (or the "Save" menu) writes the results as .txt or .xlsx.
+The button asks for the format first - "No" saves a text file, "Yes" an Excel
+file. The directory and the file name are chosen by the user.
+
+
+5. Menu
+
+    • Decimal - the number of decimal places for reactivity, temperature,
+      group position, and general (other values). Defaults: general 3,
+      temperature 2, reactivity 5, group position 2.
+    • Save - equivalent to the "Save" button.
+
+
+6. Navigation
+
+"BACK" returns to the parameter window. The entered data is preserved, so the
+reference values and the columns can be changed and the result recomputed.

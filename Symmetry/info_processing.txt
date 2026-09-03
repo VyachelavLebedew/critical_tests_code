@@ -1,0 +1,44 @@
+USER GUIDE
+
+This window shows the experiment plots for the symmetry test: the CR positions and the currents versus time. The whole plot or a selected fragment can be saved.
+
+The window opens empty. Load a file and point at the columns to plot, then draw and save.
+
+
+1. Loading the file and selecting the columns
+
+From the "File" menu:
+    • Load file — load the .s17-style experiment file (tab-separated, the same format as the other modules).
+    • Select columns — after the file is loaded, open the two-row dialog:
+        - CRs columns: the column numbers of the CR positions, written as a list like "10-12, 17, 20, 100-210" (dashes for ranges, commas to separate).
+        - Current columns: two channels are expected. If only one is given, a confirmation is asked. If a field is left empty, that plot is simply not available.
+      Press OK (or Enter) to confirm.
+
+After the columns are selected, the window states what was chosen and which plots are available.
+
+
+2. Drawing the plots
+
+From the "Plots" menu:
+    • CR positions — the selected CR columns versus time, in cm.
+    • Currents — the selected current columns versus time, in A.
+
+Each column is drawn as its own colored line, and the legend lists the column names from the file. The experiment is long, so the plot is wide and a horizontal scrollbar is provided below it. If the columns for a plot were not selected, a message is shown.
+
+
+3. Saving
+
+From the "Save" menu:
+    • Save whole plot — save the whole plot. The offered formats are PNG, PDF, SVG and JPEG.
+    • Save a fragment — save only a part of the plot.
+
+To save a fragment, click the plot to place the left bound (green dashed line) and the right bound (red dashed line). Once both are set, a further click moves the nearest line, so the selection can be corrected. Then choose "Save a fragment": only the selected time span is exported, with the axes — including the time axis — rescaled to it, and with the legend. The selection lines themselves are not saved.
+
+If no plot is drawn, or no fragment is marked, a message is shown.
+
+
+4. Navigation
+
+The "<< BACK" button returns to the symmetry table window.
+
+The plots are redrawn from the file each time; nothing is kept after leaving the window.

@@ -1,0 +1,104 @@
+USER GUIDE
+
+This window determines the differential worth of the control groups (DRDH)
+and, at the end, the DRDC. Here you mark the record step by step; the physics
+and the formulas are described in the General manual.
+
+
+1. Quick start
+
+    1. Left-click, then right-click on the steady section before the group
+       movement -> line 1.
+    2. Press "Fix 1".
+    3. Left-click, then right-click on the steady section after the
+       movement -> line 2.
+    4. Press "Fix 2".
+    5. Adjust the red line if needed with the arrow keys or a mouse click,
+       press "Proceed", and confirm the result -> the row is added.
+    6. Press "Fix 1" to confirm the inherited line, and repeat from step 3.
+    7. Repeat for each group movement.
+    8. When the last step is measured, press "Complete".
+
+The hint in the lower-right corner always shows what is expected next.
+
+
+2. What is on screen
+
+On the left is the experiment plot: reactivity as a solid dark-blue line
+(left axis) and the group positions as dashed colored lines (right axis). On
+the right is the results table. The splitter between them adjusts their size.
+
+Colors on the plot:
+    • Amber line - the interval line being defined right now
+    • Amber dots - the two points that line is built through
+    • Dark line  - an interval line already measured
+    • Red vertical line - the moment the group starts moving
+    • Green dots - where the interval lines cross the red line
+
+
+3. Marking a step
+
+Each interval line needs two clicks: left-click for the first point, right-
+click for the second (later in time). The line is drawn through both points.
+If a group moves between the two clicks, the selection is rejected and the
+movement is reported.
+
+"Fix 1" and "Fix 2" confirm the first and the second line; a line cannot be
+fixed before both of its points are set.
+
+After "Fix 2" the red vertical marker appears. Move it with a click or with
+the Left/Right arrow keys (the plot must have the keyboard focus) so that it
+spans the movement; otherwise the step is not accepted.
+
+"Proceed" computes the step and adds a row. Confirm with "Yes" to keep it, or
+"No" to remove it and re-select the second line. The second line then becomes
+the first line of the next step, so the intervals stay continuous: press
+"Fix 1" to accept it and continue.
+
+
+4. Finishing - the DRDC
+
+Press "Complete" after the last step. The DRDC is determined from the total
+reactivity change and the boric acid concentration, taken both from the
+values entered in the previous window and from the file. A method whose data
+is missing is skipped. The block appears below the results table.
+
+
+5. Extra views
+
+Under "Current_actions":
+    • "DRDH plot" - the differential worth versus group position, with 2-sigma
+      error bars; every measurement appears on it immediately. Its own two
+      buttons save the picture (PNG/PDF) or the data (text).
+    • "Current values" - an auxiliary window with the parameters of both lines
+      and the live result at the red line; it updates as the marker is moved.
+
+
+6. Checkboxes below the plot
+
+    • Reactivity units - switches every displayed reactivity between Beff and
+      %, including the table, the DRDC block and the "Current values" window.
+    • Mean group position column - shows or hides the per-group mean-position
+      columns. The data is kept either way.
+
+The current state of each is written next to its checkbox. Only visible
+columns are written to the saved files.
+
+
+7. Menu
+
+    • Decimal - the number of decimal places for the DRDC, reactivity, group
+      position, DRDH and boric acid concentration.
+    • Save - saves the results table as .xlsx or .txt. The "Save" button asks
+      for the format first; the menu items save directly. Only visible
+      columns are exported, with the units of the current settings.
+    • Plot - "Plot in new window" opens a synchronized enlarged copy;
+      "Extended cursor" toggles the crosshair with the current values.
+    • Current_actions - the DRDH plot and the Current values window (section 5).
+    • INFO - this guide.
+
+
+8. Navigation
+
+"BACK" returns to the parameter window. All entered data is preserved, so the
+parameters can be corrected and the determination repeated.

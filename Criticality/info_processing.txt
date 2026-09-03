@@ -1,0 +1,32 @@
+USER GUIDE
+
+This window shows the plots for the approach-to-criticality calculator, three tabs matching the three calculator pages. The plots are built from the values entered on the calculator tables.
+
+
+1. The tabs
+
+• Forecast — the boric acid concentration versus time: the exponential decay from the initial to the required concentration over the make-up pump run.
+
+• Insertion — two panels:
+    - the concentration decay versus time;
+    - how the reactivity and the concentration change as the sum of the H10-H12 group positions travels from the initial to the required value.
+
+• Extraction — two panels:
+    - the concentration decay versus time for each of the three blocks (H10, H11, H12);
+    - the reactivity along the movement for each block.
+
+All curves use the same polynomials and balance formula as the calculator, so the plots always match the tables.
+
+
+2. Saving
+
+Each plot has the standard toolbar above it (zoom, pan, save). In addition, "Save -> Save current plot" saves the plot of the tab currently shown. The offered formats are PNG, PDF, SVG and JPEG.
+
+If a tab has no plot, a message is shown.
+
+
+3. Navigation
+
+The "<< BACK" button returns to the calculator tables.
+
+The plots are rebuilt from the calculator each time this window is opened, so any change made to the inputs is reflected on the next visit.

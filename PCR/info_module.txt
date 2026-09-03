@@ -1,0 +1,90 @@
+USER GUIDE
+
+This window is where you assign the file columns and enter the values for the
+PCR determination. What the PCR is, and how it is computed, is in the General
+manual.
+
+Everything on this window is mandatory except the reference PCR and the base,
+which have defaults.
+
+
+1. Required parameters
+
+    • Time              1 column
+    • Temperature       1 or more columns (their mean is used)
+    • Reactivity        2 columns
+    • Pressure          1 column
+    • Group position    1 column
+
+The expected number of columns is shown next to a parameter name; a tick
+marks a parameter once it is set.
+
+
+2. Entered values
+
+    • ITC*, x10^3 %/degC    the temperature reactivity coefficient
+    • PrCR, x10^3 %/bar     the barometric reactivity coefficient
+    • MC, MWt/(degC/h)      the heat capacity
+    • sigma(DRDY)*, %       the relative uncertainty of DRDY
+    • PCR, x10^3 %/MWt      the reference value, for the deviation
+    • base, s              the window of the heating-rate fit
+
+The starred values (ITC, sigma(DRDY)) are experimental values, not reference
+ones - the footnote under the fields is a reminder.
+
+The reference PCR is optional: with it, the deviation is shown; without it, a
+dash. The base defaults to 60 s and only needs changing if a different window
+is preferred.
+
+Requirements:
+    • Numeric values; both "." and "," work as the decimal separator
+    • ITC < 0, PrCR > 0, MC > 0, sigma(DRDY) > 0, PCR reference < 0
+    • base within 10 ... 300 s
+
+The base may be set outside its range: a warning is shown and the value is
+accepted only if confirmed.
+
+Confirm a value with the button next to its field or with Enter; a tick marks
+it as accepted.
+
+
+3. Assigning file columns
+
+    1. Select a parameter in the combo box.
+    2. Click the button(s) of the required data column(s).
+    3. Press "Get a parameter" to confirm.
+    4. Select the next parameter.
+
+Parameters may be assigned in any order. Each column is checked against the
+range expected for its parameter.
+
+
+4. Steam mode
+
+Choose the steam mode in "Mode settings -> Steam mode": "With steam
+extraction" or "Without steam extraction". It is mandatory and not selected by
+default; the current mode is shown on screen. It sets only the first procedure
+- the mode can be switched in the processing window to measure the second.
+
+
+5. Launching
+
+Press "START" once the mandatory parameters, including the steam mode, are
+set. If something is missing, the missing names are listed instead.
+
+
+6. Menu
+
+    • Currently chosen buttons - view and remove the columns picked for the
+      current parameter.
+    • NFME parameters - view and release the parameters that already have
+      columns assigned.
+    • Computed parameters - view and clear the entered values.
+    • Mode settings - the steam mode, see section 4.
+    • INFO - this guide.
+
+
+7. Navigation
+
+"BACK" returns to the main menu. The selected columns and the entered values
+are not preserved; the loaded file and the beta effective value are.

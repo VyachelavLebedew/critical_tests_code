@@ -1,0 +1,81 @@
+USER GUIDE
+
+This window determines the power reactivity coefficient - PCR. The coefficient
+is measured in two procedures (with and without steam extraction) and the two
+results are combined. Here you mark the record and read the result; the
+physics and the formulas are in the General manual.
+
+
+1. What is on screen
+
+On the left is the plot: reactivity (blue), temperature (red) and pressure
+(green). On the right is the results table, with one column per procedure
+(with steam, without steam) plus the weighted mean. The splitter between them
+adjusts their size.
+
+The current steam mode is shown above the plot. Two status lines below it show
+a clock for a procedure not yet computed and a tick once it is.
+
+
+2. Marking a procedure
+
+The clicks depend on the steam mode; a hint in the corner shows which click
+is expected next.
+
+Without steam extraction:
+    1. Click the steady section before the reactivity is added (the base);
+       it is marked with a solid black line.
+    2. Press "Get DTDt RCPS" to fix the base.
+    3. Click the start of the power rise (t0), then its end (t1); both are
+       marked with dashed brown lines.
+
+With steam extraction: there is no base, so "Get DTDt RCPS" is disabled and
+only t0 and t1 are clicked.
+
+Re-clicking. Once all points are placed, a further click moves the nearest
+line, both before and after "Proceed", so any point can be corrected.
+
+If, at t1, the net heating rate is not above the expected 10 degC/h, or (without
+steam) the group stood at the same position for the base and for t0/t1, a
+confirmation is asked before the result is accepted.
+
+
+3. Computing and the second procedure
+
+Press "Proceed" to compute the current procedure; its column fills in. The
+deviation from the reference is shown only if a reference PCR was entered.
+
+Use "Options -> Switch mode" to switch to the other steam mode - the first
+result stays in the table - mark the second procedure and press "Proceed"
+again. The "Mean" column then shows the weighted mean of the two.
+
+If the two procedures are in separate files, use "Options -> Load a new file".
+The columns are re-resolved by their header names. If a header is missing, the
+file is not loaded and the missing columns are listed.
+
+
+4. The results table
+
+Each procedure column lists R(t0)/R(t1), T(t0)/T(t1)/ΔT, P(t0)/P(t1)/ΔP,
+v_T(t1), v_RCPS, N(t1), ΔR_N, PCR_exp, its uncertainty, the reference and the
+deviation. The "Mean" column shows the weighted PCR_exp and its deviation.
+
+Reactivity is shown in % by default. Use the "Units" menu to switch R(t0),
+R(t1) and ΔR_N between % and Beff.
+
+
+5. Menu
+
+    • Units - the reactivity unit (% or Beff).
+    • Decimal - the number of decimal places for reactivity, temperature,
+      pressure, and general (other values).
+    • Plot - "Plot in new window" opens a synchronized enlarged copy;
+      "Extended cursor" toggles a crosshair with the current values; "Show /
+      hide legend" toggles the legend.
+    • Save - the results as .txt (tab-separated) or .xlsx.
+
+
+6. Navigation
+
+"BACK" returns to the parameter window. The computed results are not preserved
+after leaving this window.

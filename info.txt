@@ -1,0 +1,35 @@
+USER GUIDE
+
+This is the main window. Here you load the experiment file, set beta
+effective, and open an experiment. For the full description of the program -
+how each experiment works and how to use it - open the "General manual".
+
+
+1. Loading data
+
+Load an NFME file in one of the supported formats (.txt, .s17) with the "Open
+file" button. Once it is loaded, "View data" shows a preview. At this stage
+the data is not yet checked for validity.
+
+
+2. Beta effective value
+
+After loading the file, set the beta effective value with "Enter beta". A
+positive numeric value is expected; both "." and "," work as the decimal
+separator.
+
+
+3. Opening an experiment
+
+    • ITC, DRDH and PCR become available once both the file and beta are set.
+    • Reaching Criticality becomes available once beta is set (no file needed).
+    • Symmetry can be opened at any time (it needs neither).
+
+Beta and the loaded file are kept while the program runs and are reused by
+every experiment; both can be changed here at any time.
+
+
+4. Guides
+
+    • "User guide" - this window.
+    • "General manual" - the full description of the whole program.

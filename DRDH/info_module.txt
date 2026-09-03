@@ -1,0 +1,95 @@
+USER GUIDE
+
+This window is where you assign the file columns and enter the values for the
+DRDH determination. What DRDH and DRDC mean, and how they are computed, is in
+the General manual.
+
+Only three things are mandatory: Time, Reactivity and the position of one
+group. Everything else is optional and extends the result.
+
+
+1. Required parameters
+
+    • Time              1 column
+    • Reactivity        2 columns
+    • Group positions   1 column each
+
+In the 12-group mode there are 12 groups in total; in the 10-group mode there
+are 10. The mode is switched in the "Mode settings" menu, and the current one
+is shown above the parameter list.
+
+Only one group is mandatory. Any other group may be added; a group that is
+not assigned is simply not taken into account.
+
+The expected number of columns is shown next to each parameter name. A tick
+in front of the name means the parameter is set.
+
+
+2. Optional file column
+
+Boric acid concentration (1 column) lets the DRDC be determined from the
+record itself, without entering the concentrations by hand.
+
+
+3. Entered values
+
+    • Group length, cm          the full stroke of a group
+    • Overlap, %                the overlap of consecutive groups
+    • DRDC, %/(g/kg)            the reference value, for the deviation
+    • C(H3BO3) initial, g/kg    the concentration at the start
+    • C(H3BO3) final, g/kg      the concentration at the end
+
+Group length has a default and only needs changing if the stroke differs.
+Overlap is not required for the determination (the actual overlap is taken
+from the data); it is kept for reference.
+
+Requirements:
+    • Numeric values; both "." and "," work as the decimal separator
+    • Group length > 0, Overlap > 0, DRDC <= 0, Concentrations > 0
+
+Confirm a value with the button next to its field or with Enter. A tick
+appears in the "Additional Parameters" field once it is accepted.
+
+
+4. Assigning file columns
+
+    1. Select a parameter in the combo box.
+    2. Click the button(s) of the required data column(s).
+    3. Press "Get a parameter" to confirm.
+    4. Select the next parameter.
+
+Parameters may be assigned in any order. Each column is checked against the
+range expected for its parameter, so a column assigned to the wrong parameter
+is reported rather than silently accepted.
+
+
+5. Mode settings
+
+    • Switch 12 <-> 10 - switches between the 12- and the 10-group mode. In
+      the 10-group mode H12 and H11 are removed from the list.
+    • Movement type - a side submenu with Withdrawal and Insertion. It is not
+      required (the direction is taken from the data) and may be left empty;
+      "Not specified" clears it.
+
+
+6. Launching
+
+Press "START" once the mandatory parameters are set. If something is missing,
+the missing names are listed instead.
+
+
+7. Menu
+
+    • Currently chosen buttons - view and remove the columns picked for the
+      current parameter (clear the last one, clear all, or open the list).
+    • NFME parameters - view and release the parameters that already have
+      columns assigned.
+    • Computed parameters - view and clear the entered values.
+    • Mode settings - see section 5.
+    • INFO - this guide.
+
+
+8. Navigation
+
+"BACK" returns to the main menu. The selected columns and the entered values
+are not preserved; the loaded file and the beta effective value are.

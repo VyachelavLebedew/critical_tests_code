@@ -1,0 +1,57 @@
+USER GUIDE
+
+This window is the symmetry table: you enter the reactivities of each control-
+rod (CR) drop and the asymmetry coefficients are computed automatically. What
+the coefficients mean and how they are computed is in the General manual.
+
+The results can be exported to Excel, and the plots are in a separate window.
+
+
+1. Building the table
+
+Set two values at the top:
+    • Number of CRs - the total number of CRs to be measured
+    • Reference every N CRs - how often a reference CR is dropped
+
+Press "Build table" (or Enter in either field). A reference CR is placed
+before the first CR, after every N CRs, and after the last CR. Rebuilding
+keeps the values already entered where the row type stays the same.
+
+
+2. Filling the table
+
+Double-click a cell to edit it. Move around with the arrow keys; Enter opens
+the editor on the focused cell. Per row you enter:
+    • Sym. group, CR group, CR coordinate
+    • rho_init, Beff - the reactivity before the drop
+    • rho_fin, Beff - the reactivity after the drop
+    • rho_calc, Beff - the design value, optional
+
+Reference rows are highlighted and marked "Reference CR" in the coordinate
+column; enter their reactivities in the same way.
+
+Both "." and "," work as the decimal separator. A non-numeric value in a
+reactivity cell is reported and not stored.
+
+
+3. The computed columns
+
+As soon as the reactivities are entered, the remaining columns fill in: the CR
+worth (d_rho), the group mean or the reference deviation (avg / dev), the
+asymmetry, and the criterion. A row that fails its criterion is shown in red.
+
+
+4. Menu and buttons
+
+    • Save - "Save to Excel" exports the whole table to an .xlsx file.
+    • INFO - this guide.
+
+At the bottom: "<< BACK" returns to the main menu, "Plots >>" opens the
+plotting window, and "Save to Excel" exports the table.
+
+
+5. Notes
+
+This experiment needs neither a loaded file nor a beta value, so it can be
+started directly. The reactivities and the results are held only while the
+window is open; export to Excel to keep them.

@@ -1,0 +1,69 @@
+USER GUIDE
+
+This window is where you assign the file columns and enter the values for the
+ITC and DRDY determination. What these coefficients are, and how they are
+computed, is in the General manual.
+
+
+1. Required parameters
+
+    • Time
+    • Reactivity
+    • Temperature
+    • Control-group position
+    • DTC - the fuel temperature reactivity coefficient (a computed value)
+
+For DRDY, also enter the boric acid concentration and the DYDT parameter.
+DYDT starts at -1.73 (g/cm3)/degC.
+
+The expected number of columns is shown next to a parameter name; a tick
+marks a parameter once it is set.
+
+
+2. Entered (computed) values
+
+Type each value into its field. To get the deviation of a result from its
+design value:
+    • for ITC - enter at least one of the design MTC or ITC (the other is
+      computed automatically);
+    • for DRDY - enter the design DRDY.
+
+All values use the units shown in the window.
+
+Requirements:
+    • Numeric values; both "." and "," work as the decimal separator
+    • DTC <= 0, MTC <= 0, ITC <= 0, DRDY >= 0, boric acid concentration >= 0
+
+
+3. Assigning file columns
+
+    1. Select a parameter in the combo box.
+    2. Click the button(s) of the required data column(s). The expected
+       number of columns is shown next to the parameter name.
+    3. Press "Get parameter" to confirm.
+    4. Select the next parameter.
+
+Parameters may be assigned in any order.
+
+
+4. Launching
+
+Once all the required parameters are assigned and the values are entered,
+press "START" to run the computation.
+
+
+5. Menu
+
+    • Currently chosen buttons - view and remove the columns picked for the
+      current parameter (clear the last one, clear all, or open the list to
+      remove all or only the ones picked with the mouse).
+    • NFME parameters - view and release the parameters that already have
+      columns assigned.
+    • Computed parameters - view and clear the entered values.
+
+
+6. Navigation
+
+"BACK" returns to the main menu. The entered data is not preserved except the
+beta effective value and the loaded file; a new file may be loaded and beta
+may be reset.

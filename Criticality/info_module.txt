@@ -1,0 +1,55 @@
+USER GUIDE
+
+This window is the approach-to-criticality calculator. It finds the boric acid
+concentration change and the make-up pump time needed to reach criticality.
+What is computed and the formulas behind it are in the General manual.
+
+There are three tabs:
+    • Forecast   - the plain material-balance calculation
+    • Insertion  - insertion of the top three groups in the regular sequence
+    • Extraction - extraction of the top three groups, one block each
+
+
+1. Working with the tables
+
+Each tab is an editable table:
+    • Green cells are inputs - double-click to edit them
+    • Yellow cells are the results
+    • White cells are intermediate values
+
+Editing a green input recomputes every result at once. Move around with the
+arrow keys; Enter opens the editor on the focused cell. Both "." and "," work
+as the decimal separator.
+
+
+2. The formula panel
+
+The key formulas are shown in a small panel in the lower-right corner, over
+the table. Double-click the panel to hide it; it can be shown or hidden again
+from "View -> Show / hide formulas".
+
+
+3. Group mode
+
+"Mode settings -> Switch 12 <-> 10 groups" switches the mode. The three moving
+groups are numbered 10, 11, 12 in the 12-group mode and 8, 9, 10 in the
+10-group mode; the calculation is the same three groups.
+
+
+4. Menu and buttons
+
+    • Save - "Export all pages to Excel" writes all three tabs into one .xlsx
+      file, one sheet per tab, keeping the green/yellow coloring.
+    • Mode settings - the group mode, see section 3.
+    • View - show or hide the formula panel.
+    • INFO - this guide.
+
+At the bottom: "<< BACK" returns to the main menu, "Plots >>" opens the
+plotting window, and "Export all to Excel" exports the workbook.
+
+
+5. Notes
+
+This experiment needs beta (set in the main window) but no loaded file. The
+inputs and results are held only while the window is open; export to Excel to
+keep them.
