@@ -1,0 +1,399 @@
+GENERAL MANUAL
+
+This is the general manual for the application. It
+covers the whole program: what each part does and how it works, and then how
+to operate it from start to finish.
+
+The manual has two parts:
+
+    PART A - HOW IT WORKS
+             the purpose of the program, the experiments, the physics and
+             the methods behind each result, the data format, and the way
+             the program is organized.
+
+    PART B - HOW TO USE IT
+             starting the program, the shared workflow, and a walk-through
+             of every experiment.
+
+Each experiment also has its own short user guide at the each step,
+reachable from the INFO menu or the "User guide" button inside the window.
+Those local guides tell you only which controls to use in that particular
+window. The explanation of what is computed and why lives here, in this
+user guide.
+
+
+================================================================
+PART A - HOW IT WORKS
+================================================================
+
+A.1 Purpose
+
+The program processes the records of experiments and determines the
+reactor parameters from them. It enables the user mark the relevant
+sections, and computes the result together with uncertainty and
+deviation from the design value.
+
+Five experiments are supported:
+
+    ITC          isothermal temperature coefficient (and DRDY)
+    DRDH         differential worth of the control groups (and DRDC)
+    PCR          power reactivity coefficient
+    Symmetry     azimuthal asymmetry of the control rods
+    Criticality  boric acid concentration for the approach to criticality
+    I_max - is not supported yet
+
+
+A.2 The main window and the shared inputs
+
+Two inputs are shared by the whole program and are set in the main window:
+
+    • The experiment file (the NFME record). Loaded once, it feeds every
+      experiment that reads a record.
+    • Beta effective, entered in percent.
+
+Three experiments - ITC, DRDH, PCR - need both a file and beta, so their
+buttons stay disabled until both are set. Criticality needs only beta, so it
+becomes available as beta is set. Symmetry needs neither and can be opened
+instantly.
+
+
+A.3 The data format
+
+The experiment record (the NFME file) is a text file or file in .s17 format,
+tab-separated, in the following encodings: "utf-8-sig", "cp1251", "cp1252",
+"utf-8", "latin-1". The comma as the decimal separator. 
+
+The program does not assume a fixed column order. In the parameter-selection
+window the user points at the columns that hold each quantity, and the choice
+is checked against the range expected for that quantity, so a column assigned
+to the wrong parameter is reported rather than silently accepted. When a
+second file is loaded later (PCR), the columns are re-resolved by their header
+names, so the same choice is reused automatically.
+
+
+A.4 Reactivity units
+
+Reactivity is stored internally in Beff (fractions of beta effective) and
+converted only for display:
+
+    R[%]   = R[Beff] * beta_eff        (beta_eff in percent)
+    R[pcm] = R[Beff] * beta_eff * 1000
+
+Where a window offers a unit switch, it changes only the displayed numbers,
+never the stored values, so switching back and forth loses nothing.
+
+
+A.5 ITC - isothermal temperature coefficient
+
+The ITC is the change of reactivity per degree of a uniform (isothermal)
+change of the coolant temperature. The experiment is a slow temperature ramp
+at constant power; over the chosen interval the reactivity is regressed
+against the temperature.
+
+The program computes the ITC by three techniques and averages them:
+
+    Technique 1 - two-point: the mean reactivity and temperature over a few
+                  points at each end of the interval; ITC is their ratio.
+    Technique 2 - linear fit of reactivity versus temperature over the whole
+                  interval; ITC is the slope.
+    Technique 3 - sliding window: a short window is moved along the interval,
+                  the local reactivity and temperature rates are fitted, and
+                  their ratio is averaged.
+
+Each ratio is multiplied by beta_eff * 1000 to give pcm/degC. The moderator
+coefficient follows as MTC = ITC - DTC, with DTC the fuel (Doppler) part
+entered by the user.
+
+DRDY, the density coefficient, is derived from the ITC when the boric acid
+concentration is given:
+
+    dR/dT_boron = 0.15 * C(H3BO3) - 4.55
+    DRDY        = (ITC - DTC - dR/dT_boron) / DYDT
+
+The uncertainties are the 2-sigma bands of the ITC and the DRDY.
+
+
+A.6 DRDH - differential worth of the control groups
+
+The DRDH is the reactivity added per centimeter of group travel. The record
+is a staircase: the group is moved, held, moved again. Each step is one
+measurement.
+
+For a step, a straight line is fitted over the steady section before the
+movement and another over the steady section after it. A vertical marker at
+the moment the group starts moving picks the two reactivity levels, and:
+
+    dR   = R2 - R1                      at the marker, in Beff
+    dH   = H2 - H1                      of the leading group, in percent
+    DRDH = dR / (dH * L / 100)          in %/cm
+
+where L is the group length. When several groups move together because of
+overlap, the leading group - the one with the higher number - is used. The
+running sum of dR over the steps gives the integral worth.
+
+DRDC, the boric acid coefficient, closes the experiment:
+
+    DRDC = dR_total / dC
+
+with dR_total the last value of the running reactivity sum and dC the change
+of boric acid concentration, taken either from the values entered by the user
+or from the concentration column of the file (the mean over the minute before
+the first and the last click).
+
+The error bar of each DRDH point is +/-2 sigma, with
+
+    sigma(dR/dH) = 1/dH * sqrt( sigma^2(dR) + (dR/dH)^2 * sigma^2(dH) )
+
+taking sigma(dR) as 3 % of dR and sigma(dH) as 0.4 cm.
+
+
+A.7 PCR - power reactivity coefficient
+
+The PCR is the reactivity change per unit of power. It is measured twice -
+with and without steam extraction - and the two results are combined.
+
+A steady section before the power rise gives the base heating rate v_RCPS
+(zero with steam extraction). The start and the end of the power rise give
+the two working points. Then:
+
+    N(t1)   = MC * (v_T(t1) - v_RCPS),   N(t0) = 0
+    dR_N    = -[ R(t0) - R(t1) + ITC*dT + PrCR*dP ]
+    PCR_exp = dR_N / N(t1)
+
+with MC the heat capacity, v_T(t1) the local heating rate at the end point,
+ITC and PrCR the temperature and the barometric coefficients, and dT and dP
+the temperature and the pressure changes. ITC and PrCR are the experimental
+values entered by the user; they correct the raw reactivity for the
+temperature and the pressure drift.
+
+The final PCR is the inverse-variance weighted mean of the two PCR_exp
+values. The uncertainty of each combines the uncertainties of dR_N and N(t1);
+the entered sigma(DRDY) affects only the width of the band, not the value.
+
+
+A.8 Symmetry - azimuthal asymmetry
+
+The symmetry test checks that control rods at symmetric core positions have
+the same worth. Each rod (CR) is dropped and its worth is the reactivity
+change of the drop. Reference rods are dropped periodically to track the
+drift of the measurement.
+
+    d_rho     = |rho_init - rho_fin|                the CR worth
+    asymmetry = (sqrt(d_rho / group_mean) - 1)*100  for a CR, in %
+    deviation = 100 * |N - d_rho| / N               for a reference, in %
+
+where group_mean is the mean worth of the CRs between two references and N is
+the running mean of the previous reference worths. A CR passes if its
+asymmetry is under 10 %; a reference passes if its deviation is under 3 %.
+
+
+A.9 Criticality - approach to criticality
+
+This is a calculator, not a record-processing experiment. It reproduces the
+reference boric acid workbook and finds the concentration change and the
+make-up pump time needed to reach criticality. It has three sheets:
+
+    Forecast   - a plain material-balance calculation
+    Insertion  - insertion of the top three groups in the regular sequence
+    Extraction - extraction of the top three groups, one block each
+
+Densities come from 6th-degree polynomials of temperature. For insertion and
+extraction, the reactivity, the concentration and dr/dC come from 6th-degree
+polynomials of group position - the sum of the three positions for insertion,
+each group's own position for extraction. The reactivity added is
+
+    R = (dR_req - dR_init) / beta_eff
+
+and the make-up pump time from the material balance is
+
+    t = ln((C_req - C_makeup) / (C_init - C_makeup))
+        * ( -V / (flow * rho_purge / rho_water) )
+
+with the required volume equal to flow times this time.
+
+The three top groups are always the moving ones. In the 12-group mode they
+are numbered 10, 11, 12; in the 10-group mode they are the top three of ten,
+numbered 8, 9, 10. Only the labels change - the calculation is the same three
+groups.
+
+
+A.10 How the program is organized
+
+The program is one main window that launches each experiment. An experiment
+has two windows: a parameter window (the "Module"), where the file columns are
+picked and the values are entered, and a processing window, where the record
+is marked and the result is computed. Criticality and Symmetry, which are
+calculators, use the parameter window as an editable table and the processing
+window for the plots.
+
+All the physics lives in one shared file of formulas, so every window that
+needs a given quantity computes it the same way. Two more shared files hold
+the program settings (defaults, ranges, polynomial coefficients) and the
+messages shown to the user.
+
+
+================================================================
+PART B - HOW TO USE IT
+================================================================
+
+B.1 Starting
+
+!! -----  Initially: run the command in the terminal (GitBush in strongly recommended): pip freeze > requirements.txt in 
+
+Open the program. In the main window:
+
+    1. Load the experiment file. A confirmation appears once it is read.
+    2. Enter beta effective, in percent, and confirm it.
+
+The experiment buttons enable themselves as their inputs are met: ITC, DRDH
+and PCR once both the file and beta are set; Criticality once beta is set;
+Symmetry at any time.
+
+Beta and the loaded file are kept while the program runs, so they are set
+once and reused by every experiment. They can be changed at any time from the
+main window, and a new file can be loaded.
+
+
+B.2 The shared workflow of ITC, DRDH and PCR
+
+These three experiments follow the same two-step shape.
+
+Step 1 - the parameter window:
+
+    • Assign the file columns. Pick a parameter in the combo box, click the
+      button(s) of its data column(s), and confirm with "Get a parameter".
+      The expected number of columns is shown next to each parameter name,
+      and a tick marks a parameter once it is set. Parameters may be assigned
+      in any order.
+    • Enter the values. Type each value and confirm it with its button or
+      with Enter; a tick marks it as accepted. Both "." and "," work as the
+      decimal separator.
+    • Set the mode if the experiment has one (the group mode for DRDH, the
+      steam mode for PCR).
+    • Press START. If anything mandatory is missing, the missing names are
+      listed instead.
+
+Step 2 - the processing window:
+
+    • Mark the record on the plot with mouse clicks, as the experiment
+      requires (see the walk-through below). A hint in the corner always
+      shows the next expected action.
+    • Compute, read the result from the table, and save it.
+
+The "BACK" button steps back one window. Beta and the file survive; the
+column choice, the entered values and the computed results do not, so a run
+is done in one visit.
+
+
+B.3 ITC - walk-through
+
+Parameter window: assign Time, Reactivity, Temperature and one control-group
+position. Enter DTC (the fuel coefficient). For DRDY, also enter the boric
+acid concentration and DYDT (default -1.73). To get the deviation of a
+result from its design value, enter the design ITC or MTC (the missing one is
+computed) and the design DRDY. Press START.
+
+Processing window: the plot shows reactivity (blue), temperature (red) and
+group position (green), with the results table on the right. Left-click sets
+the left bound of the interval, right-click the right bound. The temperature
+and reactivity at both ends, and their differences, appear below the plot for
+a quick check. When the interval is valid, press "Proceed": the three
+techniques, their mean, the uncertainties and the deviations fill the table.
+Save the table as .txt or .xlsx.
+
+
+B.4 DRDH - walk-through
+
+Parameter window: assign Time, Reactivity and at least one group position;
+add more groups to include their movement. Optionally assign the boric acid
+column, and enter the group length, the reference DRDC and the start/end
+concentrations. Choose the group mode (12 or 10) in "Mode settings". Press
+START.
+
+Processing window, per step:
+
+    1. Left-click then right-click the steady section before the movement to
+       place line 1; press "Fix 1".
+    2. Left-click then right-click the steady section after the movement to
+       place line 2; press "Fix 2".
+    3. A red vertical marker appears at the start of the movement. Adjust it
+       with the arrow keys or a click so that it spans the movement.
+    4. Press "Proceed" and confirm: the row is added and line 2 becomes line
+       1 of the next step.
+    5. Press "Fix 1" to confirm the inherited line and repeat from step 2.
+
+Press "Complete" after the last step to compute the DRDC. The DRDH-versus-
+position plot and the "Current values" window are under "Current_actions".
+Save the table from the "Save" menu.
+
+
+B.5 PCR - walk-through
+
+Parameter window: assign Time, Temperature (one or more columns, averaged),
+Reactivity, Pressure and the group position. Enter ITC, PrCR, MC and, for the
+uncertainty, sigma(DRDY); optionally the reference PCR and the base window
+(default 60 s). Choose the steam mode. Press START.
+
+Processing window, for each procedure:
+
+    • Without steam extraction: click the steady section before the rise,
+      press "Get DTDt RCPS" to fix the base, then click the start (t0) and
+      the end (t1) of the power rise.
+    • With steam extraction: there is no base, so only t0 and t1 are clicked.
+
+Press "Proceed" to compute the procedure. Then use "Options -> Switch mode",
+mark the second procedure and press "Proceed" again. The "Mean" column shows
+the weighted mean of the two. If the procedures are in separate files, load
+the second with "Options -> Load a new file". Save from the "Save" menu.
+
+
+B.6 Symmetry - walk-through
+
+Symmetry opens directly from the main window. It is an editable table.
+
+    1. Set "Number of CRs" and "Reference every N CRs", then press "Build
+       table" (or Enter). References are placed before the first CR, after
+       every N CRs, and after the last CR.
+    2. Double-click a cell to edit it. For each CR row enter the initial and
+       the final reactivity; the worth, the asymmetry, the deviations and the
+       criteria fill in automatically. A failing row turns red.
+    3. Move around the table with the arrow keys; Enter opens the editor on
+       the focused cell.
+
+Export the table with "Save to Excel". The plots (CR positions and currents
+versus time) are in the plotting window, opened with "Plots >>": load a file,
+select the columns, draw, and save the whole plot or a marked fragment.
+
+
+B.7 Criticality - walk-through
+
+Criticality opens once beta is set. It has three tabs - Forecast, Insertion,
+Extraction - each an editable table.
+
+    1. Double-click a green cell to edit an input. Every yellow result and
+       every intermediate value recomputes at once.
+    2. Move around with the arrow keys; Enter edits the focused cell.
+    3. Switch between the 12- and the 10-group mode in "Mode settings" when
+       needed.
+
+The key formulas are shown in a corner panel; double-click it, or use "View",
+to hide or show it. "Export all pages to Excel" writes the three tabs to one
+workbook, keeping the green/yellow coloring. The plots - concentration versus
+time, and reactivity and concentration along the group movement - are in the
+plotting window, opened with "Plots >>".
+
+
+B.8 Saving and units
+
+Results are saved as .txt (tab-separated) or .xlsx from the "Save" button or
+menu; the calculators export to .xlsx. Plots are saved as PNG, PDF, SVG or
+JPEG. Where a legend or a unit switch is offered, the file follows the
+current state: a hidden legend is not drawn in the saved picture, and the
+saved numbers use the selected unit.
+
+
+B.9 A note on precision
+
+The processing windows let the number of decimal places be set per quantity
+(reactivity, temperature, pressure, group position, and so on) from the
+"Decimal" menu. This changes only the display, not the stored precision.
