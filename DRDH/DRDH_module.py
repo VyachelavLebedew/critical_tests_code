@@ -111,6 +111,8 @@ class DRDH_module:
         self.selected_columns: List[str] = []
         self.NFME_parameters: List[str] = []
         self.computed_parameters: List[str] = []
+        self.selected_column_buttons: dict[str, tk.Button] = {}
+        self.parameter_columns: dict[str, list[str]] = {}
 
     def create_DRDH_window(self) -> None:
         """
@@ -900,6 +902,8 @@ class DRDH_module:
         getattr(self, attr_name).clear()
         if attr_name == 'NFME_parameters':
             self.reset_parameters('NFME')
+            self.parameter_columns.clear()
+            self.clear_selected_column_buttons()
 
             self.time_required_label.config(text="⏱ Time :1")
             self.reactivity_required_label.config(text="⏱ Reactivity :2")
@@ -1232,7 +1236,7 @@ class DRDH_module:
                     selected=len(self.selected_columns)
                     )
                 if not response:
-                    self.selected_columns.clear()
+                    self.clear_selected_column_buttons()
                     return
 
         data: pd.DataFrame = self.df[self.selected_columns]
@@ -1254,7 +1258,7 @@ class DRDH_module:
                         )
 
                     if not response:
-                        self.selected_columns.clear()
+                        self.clear_selected_column_buttons()
                         return
                     break
 
@@ -1269,7 +1273,7 @@ class DRDH_module:
                                       col=col,
                                       value=s
                                       )
-                        self.selected_columns.clear()
+                        self.clear_selected_column_buttons()
                         return
 
             invalid_values = series[~series.between(min_val, max_val)]
@@ -1282,7 +1286,7 @@ class DRDH_module:
                     col=col
                     )
                 if not response:
-                    self.selected_columns.clear()
+                    self.clear_selected_column_buttons()
                     return
 
         result: pd.Series = (
@@ -1292,14 +1296,70 @@ class DRDH_module:
 
         setattr(self, rules["attr"], result)
 
+        # Remember which NFME columns were assigned to this parameter.
+        self.parameter_columns[selected_param] = self.selected_columns.copy()
+
         label = rules["label"](self)
-        label.config(text=rules["label_text"])
+
+        selected_columns_text = ", ".join(self.selected_columns)
+
+        label.config(
+            text=f"{rules['label_text']} — {selected_columns_text}"
+        )
 
         if selected_param not in self.NFME_parameters:
             self.NFME_parameters.append(selected_param)
 
-        self.selected_columns.clear()
+        self.clear_selected_column_buttons()
 
+    def reset_required_parameter_label(self, parameter: str) -> None:
+        """Reset a required parameter label and its assigned columns."""
+
+        self.parameter_columns.pop(parameter, None)
+
+        label_map = {
+            "Time": self.time_required_label,
+            "Reactivity": self.reactivity_required_label,
+            "Boric acid concentration": self.boric_acid_NFME_required_label,
+            "12 Group position": self.H12_position_required_label,
+            "11 Group position": self.H11_position_required_label,
+            "10 Group position": (
+                self.H12_position_required_label
+                if self.groups_count == 10
+                else self.H10_position_required_label
+            ),
+            "9 Group position": self.H9_position_required_label,
+            "8 Group position": self.H8_position_required_label,
+            "7 Group position": self.H7_position_required_label,
+            "6 Group position": self.H6_position_required_label,
+            "5 Group position": self.H5_position_required_label,
+            "4 Group position": self.H4_position_required_label,
+            "3 Group position": self.H3_position_required_label,
+            "2 Group position": self.H2_position_required_label,
+            "1 Group position": self.H1_position_required_label,
+        }
+
+        default_text = {
+            "Time": "⏱ Time :1",
+            "Reactivity": "⏱ Reactivity :2",
+            "Boric acid concentration": "⏱ Boric acid :2",
+            "12 Group position": "⏱ H₁₂ :1",
+            "11 Group position": "⏱ H₁₁ :1",
+            "10 Group position": "⏱ H₁₀ :1",
+            "9 Group position": "⏱ H₉ :1",
+            "8 Group position": "⏱ H₈ :1",
+            "7 Group position": "⏱ H₇ :1",
+            "6 Group position": "⏱ H₆ :1",
+            "5 Group position": "⏱ H₅ :1",
+            "4 Group position": "⏱ H₄ :1",
+            "3 Group position": "⏱ H₃ :1",
+            "2 Group position": "⏱ H₂ :1",
+            "1 Group position": "⏱ H₁ :1",
+        }
+
+        label = label_map.get(parameter)
+        if label:
+            label.config(text=default_text[parameter])
     def get_entry(self, entry, value_name: str) -> None:
         """
         Obtain a computed parameter via entry field.
@@ -1392,15 +1452,39 @@ class DRDH_module:
 
     def get_button_name(self, button_name: str) -> None:
         """
-        The main aim is to bind NFME file and the button pressed.
+        Toggle selection of an NFME data column.
 
-        Args:
-            button_name (str): Name of the column/parameter.
+        Selected columns remain visually pressed until the parameter
+        is assigned or the selection is cleared.
         """
-        if self.selected_columns is None:
-            self.selected_columns = []
-        self.selected_columns += [button_name]
+        if button_name in self.selected_columns:
+            self.selected_columns.remove(button_name)
 
+            button = self.selected_column_buttons.get(button_name)
+            if button:
+                button.config(
+                    relief=tk.RAISED,
+                    bd=2
+                )
+        else:
+            self.selected_columns.append(button_name)
+
+            button = self.selected_column_buttons.get(button_name)
+            if button:
+                button.config(
+                    relief=tk.SUNKEN,
+                    bd=2
+                )
+
+    def clear_selected_column_buttons(self) -> None:
+        """Reset visual selection of all NFME column buttons."""
+        for button in self.selected_column_buttons.values():
+            button.config(
+                relief=tk.RAISED,
+                bd=2
+            )
+
+        self.selected_columns.clear()
     def reset_parameters(self, *args: str) -> None:
         """
         Auxiliary method aimes at reset either NFME or computed parameters
@@ -1644,7 +1728,16 @@ class DRDH_module:
                 text=column_name,
                 command=lambda name=column_name: self.get_button_name(name),
                 width=NFME_BUTTONS['BUTTONS_WIDTH'],
-                font=FONTS['DATA_FONT']
+                font=FONTS['DATA_FONT'],
+                relief=tk.RAISED,
+                bd=2
+            )
+
+            self.selected_column_buttons[column_name] = button
+
+            button.pack(
+                padx=GAPS['GAPS_X']['PAD_X_5'],
+                pady=GAPS['GAPS_Y']['PAD_Y_2']
             )
             button.pack(
                 padx=GAPS['GAPS_X']['PAD_X_5'], pady=GAPS['GAPS_Y']['PAD_Y_2']

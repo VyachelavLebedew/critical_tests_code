@@ -25,7 +25,7 @@ from Settings import (
     DECIMAL, show_info, FONTS, COLORS, GAPS, ITC_COMPUTATION_VALUES,
     SPLITTER_MINSIZES, PLOT, CURSOR, TABLE, TIME_SHIFT,
     GROUP_COLORS, PLOT_STYLE, DRDH_HINTS, DRDH_ERROR, DRDH_PLOT,
-    DRDC_WINDOW_SEC
+    DRDC_WINDOW_SEC, ENTRY_WIDTH
 )
 
 mpl.rcParams['font.family'] = 'Times New Roman'
@@ -675,7 +675,20 @@ class DRDH_processing:
             font=FONTS['DATA_FONT'],
             command=self.extended_cursor
         )
+        experiment_parameters = tk.Menu(
+            self.menu_bar,
+            tearoff=1
+        )
+        self.menu_bar.add_cascade(
+            label="computed parameters",
+            menu=experiment_parameters
+        )
 
+        experiment_parameters.add_command(
+            label="Edit parameters",
+            font=FONTS['DATA_FONT'],
+            command=self.open_experiment_parameters
+        )
         current_actions = tk.Menu(self.menu_bar, tearoff=1)
         self.menu_bar.add_cascade(
             label="Current_actions", menu=current_actions
@@ -691,6 +704,286 @@ class DRDH_processing:
             font=FONTS['DATA_FONT'],
             command=self.display_current_values
         )
+
+    def open_experiment_parameters(self) -> None:
+        if (
+                hasattr(self, "experiment_parameters_window")
+                and self.experiment_parameters_window.winfo_exists()
+        ):
+            self.experiment_parameters_window.lift()
+            self.experiment_parameters_window.focus_force()
+            return
+
+        window = tk.Toplevel(self.root)
+        window.title("Computed parameters")
+        window.resizable(False, False)
+
+        self.experiment_parameters_window = window
+
+        frame = tk.Frame(window)
+        frame.pack(padx=20, pady=20)
+
+        parameters = [
+            ("Group length:", "Group_length", self.Group_length),
+            ("Overlap:", "overlap", self.overlap),
+            ("DRDC:", "DRDC", self.DRDC),
+            ("Boric acid start:", "boric_acid_start", self.boric_acid_start),
+            ("Boric acid finish:", "boric_acid_finish", self.boric_acid_finish),
+        ]
+
+        self.experiment_parameter_vars = {}
+        self.experiment_parameter_entries = {}
+
+        for row, (label_text, parameter_name, value) in enumerate(parameters):
+            tk.Label(
+                frame,
+                text=label_text
+            ).grid(
+                row=row,
+                column=0,
+                padx=10,
+                pady=5,
+                sticky="w"
+            )
+
+            var = tk.StringVar(
+                value="" if value is None else str(value)
+            )
+
+            self.experiment_parameter_vars[parameter_name] = var
+
+            entry = tk.Entry(
+                frame,
+                width=ENTRY_WIDTH,
+                textvariable=var
+            )
+            self.experiment_parameter_entries[parameter_name] = entry
+
+            entry.grid(
+                row=row,
+                column=1,
+                padx=10,
+                pady=5
+            )
+
+        button_frame = tk.Frame(frame)
+        button_frame.grid(
+            row=len(parameters),
+            column=0,
+            columnspan=2,
+            pady=(15, 0)
+        )
+
+        tk.Button(
+            button_frame,
+            text="Apply",
+            command=self.apply_experiment_parameters
+        ).pack(
+            side="left",
+            padx=5
+        )
+
+        tk.Button(
+            button_frame,
+            text="Cancel",
+            command=self.close_experiment_parameters
+        ).pack(
+            side="left",
+            padx=5
+        )
+
+        window.protocol(
+            "WM_DELETE_WINDOW",
+            self.close_experiment_parameters
+        )
+
+        window.bind(
+            "<Return>",
+            lambda event: self.apply_experiment_parameters()
+        )
+
+        window.bind(
+            "<Escape>",
+            lambda event: self.close_experiment_parameters()
+        )
+
+    def _format_parameter_value(self, value) -> str:
+        """Convert a parameter value to text for the edit field."""
+
+        if value is None:
+            return ""
+
+        try:
+            return str(value)
+        except Exception:
+            return ""
+
+    def apply_experiment_parameters(self) -> None:
+        """
+        Validate and apply edited experiment parameters.
+
+        Changes are applied to the current DRDH_processing instance only.
+        """
+
+        values = {}
+
+        required_parameters = {
+            "Group_length",
+            "overlap",
+        }
+
+        optional_parameters = {
+            "DRDC",
+            "boric_acid_start",
+            "boric_acid_finish",
+        }
+
+        for parameter_name, var in self.experiment_parameter_vars.items():
+
+            text = var.get().strip().replace(",", ".")
+
+            # ---------------------------------------------------------
+            # Empty value
+            # ---------------------------------------------------------
+            if not text:
+
+                if parameter_name in required_parameters:
+                    Messages.show(
+                        "error",
+                        "VALUE_ERROR",
+                        value_name=parameter_name,
+                        error="Value cannot be empty"
+                    )
+
+                    self.experiment_parameter_entries[
+                        parameter_name
+                    ].focus_set()
+
+                    return
+
+                # Optional parameter
+                values[parameter_name] = None
+                continue
+
+            # ---------------------------------------------------------
+            # Convert to float
+            # ---------------------------------------------------------
+            try:
+                values[parameter_name] = float(text)
+
+            except ValueError as error:
+                Messages.show(
+                    "error",
+                    "VALUE_ERROR",
+                    value_name=parameter_name,
+                    error=error
+                )
+
+                self.experiment_parameter_entries[
+                    parameter_name
+                ].focus_set()
+
+                return
+
+        # ---------------------------------------------------------
+        # Validation
+        # ---------------------------------------------------------
+
+        if values["Group_length"] <= 0:
+            Messages.show(
+                "error",
+                "VALUE_POSTIVE",
+                value="Group length",
+                sign="positive"
+            )
+            return
+
+        if values["overlap"] < 0:
+            Messages.show(
+                "error",
+                "VALUE_POSTIVE",
+                value="Overlap",
+                sign="positive"
+            )
+            return
+
+        if values["overlap"] > 100:
+            Messages.show(
+                "error",
+                "VALUE_ERROR",
+                value_name="Overlap",
+                error="Overlap must not exceed 100 %"
+            )
+            return
+
+        if values["DRDC"] is not None and values["DRDC"] > 0:
+            Messages.show(
+                "error",
+                "VALUE_POSTIVE",
+                value="DRDC",
+                sign="negative"
+            )
+            return
+
+        if (
+                values["boric_acid_start"] is not None
+                and values["boric_acid_start"] < 0
+        ):
+            Messages.show(
+                "error",
+                "VALUE_POSTIVE",
+                value="C(H₃BO₃) initial",
+                sign="positive"
+            )
+            return
+
+        if (
+                values["boric_acid_finish"] is not None
+                and values["boric_acid_finish"] < 0
+        ):
+            Messages.show(
+                "error",
+                "VALUE_POSTIVE",
+                value="C(H₃BO₃) final",
+                sign="positive"
+            )
+            return
+
+        # ---------------------------------------------------------
+        # Apply
+        # ---------------------------------------------------------
+
+        self.Group_length = values["Group_length"]
+        self.overlap = values["overlap"]
+        self.DRDC = values["DRDC"]
+        self.boric_acid_start = values["boric_acid_start"]
+        self.boric_acid_finish = values["boric_acid_finish"]
+
+        # Update temporary fields to normalized values.
+        for parameter_name, value in values.items():
+            self.experiment_parameter_vars[
+                parameter_name
+            ].set(str(value))
+
+        self.close_experiment_parameters()
+
+    def close_experiment_parameters(self) -> None:
+        """Close the experiment parameters window."""
+
+        if (
+                hasattr(self, "experiment_parameters_window")
+                and self.widget_alive(self.experiment_parameters_window)
+        ):
+            self.experiment_parameters_window.grab_release()
+            self.experiment_parameters_window.destroy()
+
+        for attr in (
+                "experiment_parameters_window",
+                "experiment_parameter_vars",
+                "experiment_parameter_entries",
+        ):
+            if hasattr(self, attr):
+                delattr(self, attr)
 
     def create_drdh_plot(self):
         """
@@ -2265,6 +2558,10 @@ class DRDH_processing:
             "button_press_event",
             lambda event, p=plot_obj: self.on_plot_click(event, p)
         )
+        canvas.mpl_connect(
+            "scroll_event",
+            lambda event, p=plot_obj: self.on_plot_scroll(event, p)
+        )
         canvas.get_tk_widget().bind("<Left>", self.move_line_left)
         canvas.get_tk_widget().bind("<Right>", self.move_line_right)
         canvas.get_tk_widget().focus_set()
@@ -2510,6 +2807,55 @@ class DRDH_processing:
             "R": R,
             "groups": group_values
         }
+
+    def on_plot_scroll(self, event, plot):
+        """
+        Zoom the plot horizontally with the mouse wheel.
+
+        Zoom is performed around the mouse cursor position.
+        The X axis is shared by ax1 and ax2.
+        The Y axes remain unchanged.
+        """
+
+        if event.inaxes not in (plot["ax1"], plot["ax2"]):
+            return
+
+        # Do not interfere with an explicitly selected toolbar mode.
+        if plot["toolbar"].mode != '':
+            return
+
+        if event.xdata is None:
+            return
+
+        # Scroll up -> zoom in.
+        # Scroll down -> zoom out.
+        if event.button == "up":
+            scale = 0.8
+        elif event.button == "down":
+            scale = 1.25
+        else:
+            return
+
+        ax1 = plot["ax1"]
+        ax2 = plot["ax2"]
+
+        # ---------------------------------------------------------
+        # X axis
+        # ---------------------------------------------------------
+        # Zoom around the mouse cursor position.
+        x_min, x_max = ax1.get_xlim()
+        x_center = event.xdata
+
+        new_x_min = x_center + (x_min - x_center) * scale
+        new_x_max = x_center + (x_max - x_center) * scale
+
+        ax1.set_xlim(new_x_min, new_x_max)
+        ax2.set_xlim(new_x_min, new_x_max)
+
+        # Redraw all active/finished lines using the new limits.
+        self.make_interval_lines_infinite()
+
+        plot["canvas"].draw_idle()
 
     def on_plot_click(self, event, plot):
         # print("CLICK:", event.button, event.inaxes) <- debug
