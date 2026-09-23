@@ -95,6 +95,8 @@ class ITC_module:
         self.selected_columns: List[str] = []
         self.NFME_parameters: List[str] = []
         self.computed_parameters: List[str] = []
+        self.selected_column_buttons: dict[str, tk.Button] = {}
+        self.parameter_columns: dict[str, List[str]] = {}
 
     def create_ITC_window(self) -> None:
         """
@@ -666,43 +668,60 @@ class ITC_module:
             attr_name (str): Attribute name to clear.
             listbox (tk.Listbox, optional): Related listbox to clear.
         """
-        getattr(self, attr_name).clear()
-        if attr_name == 'NFME_parameters':
-            self.reset_parameters('NFME')
+        if attr_name == 'selected_columns':
+            self.clear_selected_column_buttons()
 
-            self.time_required_label.config(text="⏱ Time :1")
-            self.temparature_required_label.config(text="⏱ Temperature")
-            self.reactivity_required_label.config(text="⏱ Reactivity :2")
-            self.group_position_required_label.config(
-                text="⏱ Group position :1"
-            )
+        else:
+            getattr(self, attr_name).clear()
 
-        elif attr_name == 'computed_parameters':
-            self.reset_parameters('computed')
-            self.reset_entry(
-                self.DTC_entry, self.MTC_entry, self.ITC_entry,
-                self.DRDY_entry, self.boric_acid_entry, self.DYDT_entry
-            )
-            self.DTC_entry.focus_set()
-            self.DYDT_entry.insert(0, "-1.73")
+            if attr_name == 'NFME_parameters':
+                self.reset_parameters('NFME')
+                self.parameter_columns.clear()
 
-            self.DTC_required_label.config(text='⏱ DTC')
-            self.MTC_required_label.config(text='⏱ MTC')
-            self.ITC_required_label.config(text='⏱ ITC')
-            self.boric_acid_required_label.config(
-                text='⏱ Boric acid concentration '
-            )
-            self.DRDY_required_label.config(text='⏱ DRDY')
+                self.time_required_label.config(text="⏱ Time :1")
+                self.temparature_required_label.config(text="⏱ Temperature")
+                self.reactivity_required_label.config(text="⏱ Reactivity :2")
+                self.group_position_required_label.config(
+                    text="⏱ Group position :1"
+                )
+
+            elif attr_name == 'computed_parameters':
+                self.reset_parameters('computed')
+                self.reset_entry(
+                    self.DTC_entry,
+                    self.MTC_entry,
+                    self.ITC_entry,
+                    self.DRDY_entry,
+                    self.boric_acid_entry,
+                    self.DYDT_entry
+                )
+                self.DTC_entry.focus_set()
+                self.DYDT_entry.insert(0, "-1.73")
+
+                self.DTC_required_label.config(text='⏱ DTC')
+                self.MTC_required_label.config(text='⏱ MTC')
+                self.ITC_required_label.config(text='⏱ ITC')
+                self.boric_acid_required_label.config(
+                    text='⏱ Boric acid concentration '
+                )
+                self.DRDY_required_label.config(text='⏱ DRDY')
 
         if listbox is not None:
             listbox.delete(0, tk.END)
 
     def clear_last_parameter(self) -> None:
         """
-        Remove the last parameter from currently chosen NFME parameters.
+        Remove the last selected NFME column and reset its button.
         """
         if self.selected_columns:
-            _ = self.selected_columns.pop()
+            button_name = self.selected_columns.pop()
+
+            button = self.selected_column_buttons.get(button_name)
+            if button:
+                button.config(
+                    relief=tk.RAISED,
+                    bd=2
+                )
 
     def clear_selected_parameters(
             self,
@@ -722,6 +741,8 @@ class ITC_module:
         removed_params = []
         for index in reversed(selected):
             removed_params += [params[index]]
+            if attr_name == 'NFME_parameters':
+                self.parameter_columns.pop(params[index], None)
             del params[index]
             listbox.delete(index)
 
@@ -873,7 +894,7 @@ class ITC_module:
                     selected=len(self.selected_columns)
                     )
                 if not response:
-                    self.selected_columns.clear()
+                    self.clear_selected_column_buttons()
                     return
 
         data: pd.DataFrame = self.df[self.selected_columns]
@@ -895,7 +916,7 @@ class ITC_module:
                         )
 
                     if not response:
-                        self.selected_columns.clear()
+                        self.clear_selected_column_buttons()
                         return
                     break
 
@@ -910,7 +931,7 @@ class ITC_module:
                                       col=col,
                                       value=s
                                       )
-                        self.selected_columns.clear()
+                        self.clear_selected_column_buttons()
                         return
 
             invalid_values = series[~series.between(min_val, max_val)]
@@ -923,7 +944,7 @@ class ITC_module:
                     col=col
                     )
                 if not response:
-                    self.selected_columns.clear()
+                    self.clear_selected_column_buttons()
                     return
 
         result: pd.Series = (
@@ -933,13 +954,20 @@ class ITC_module:
 
         setattr(self, rules["attr"], result)
 
+        # Save column names assigned to the parameter
+        self.parameter_columns[selected_param] = self.selected_columns.copy()
+
         label = rules["label"](self)
-        label.config(text=rules["label_text"])
+
+        column_names = ", ".join(self.parameter_columns[selected_param])
+        label.config(
+            text=f"{rules['label_text']} [{column_names}]"
+        )
 
         if selected_param not in self.NFME_parameters:
             self.NFME_parameters.append(selected_param)
 
-        self.selected_columns.clear()
+        self.clear_selected_column_buttons()
 
     def get_entry(self, entry, value_name: str) -> None:
         """
@@ -1039,14 +1067,39 @@ class ITC_module:
 
     def get_button_name(self, button_name: str) -> None:
         """
-        The main aim is to bind NFME file and the button pressed.
+        Toggle selection of an NFME data column.
 
-        Args:
-            button_name (str): Name of the column/parameter.
+        Selected columns remain visually pressed until the parameter
+        is assigned or the selection is cleared.
         """
-        if self.selected_columns is None:
-            self.selected_columns = []
-        self.selected_columns += [button_name]
+        if button_name in self.selected_columns:
+            self.selected_columns.remove(button_name)
+
+            button = self.selected_column_buttons.get(button_name)
+            if button:
+                button.config(
+                    relief=tk.RAISED,
+                    bd=2
+                )
+        else:
+            self.selected_columns.append(button_name)
+
+            button = self.selected_column_buttons.get(button_name)
+            if button:
+                button.config(
+                    relief=tk.SUNKEN,
+                    bd=2
+                )
+
+    def clear_selected_column_buttons(self) -> None:
+        """Reset visual selection of all NFME column buttons."""
+        for button in self.selected_column_buttons.values():
+            button.config(
+                relief=tk.RAISED,
+                bd=2
+            )
+
+        self.selected_columns.clear()
 
     def reset_parameters(self, *args: str) -> None:
         """
@@ -1091,7 +1144,8 @@ class ITC_module:
             window (tk.Widget): ITC frame to destroy.
         """
         self.reset_parameters('NFME', 'computed')
-        self.selected_columns = []
+        self.clear_selected_column_buttons()
+        self.parameter_columns.clear()
         self.NFME_parameters = []
         self.computed_parameters = []
 
@@ -1286,8 +1340,12 @@ class ITC_module:
                 width=NFME_BUTTONS['BUTTONS_WIDTH'],
                 font=FONTS['DATA_FONT']
             )
+
+            self.selected_column_buttons[column_name] = button
+
             button.pack(
-                padx=GAPS['GAPS_X']['PAD_X_5'], pady=GAPS['GAPS_Y']['PAD_Y_2']
+                padx=GAPS['GAPS_X']['PAD_X_5'],
+                pady=GAPS['GAPS_Y']['PAD_Y_2']
             )
 
         # Updating the scrolling area after adding all buttons
