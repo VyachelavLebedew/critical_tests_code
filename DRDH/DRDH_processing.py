@@ -680,7 +680,7 @@ class DRDH_processing:
             tearoff=1
         )
         self.menu_bar.add_cascade(
-            label="computed parameters",
+            label="Computed parameters",
             menu=experiment_parameters
         )
 
@@ -717,11 +717,15 @@ class DRDH_processing:
         window = tk.Toplevel(self.root)
         window.title("Computed parameters")
         window.resizable(False, False)
-
+        window.config(bg=COLORS['PARAMETERS_BACKGROUND_COLOR'])
         self.experiment_parameters_window = window
 
-        frame = tk.Frame(window)
-        frame.pack(padx=20, pady=20)
+        frame = tk.Frame(window, bg=COLORS['PARAMETERS_BACKGROUND_COLOR'])
+        frame.grid(
+            row=0, column=0,
+            padx=GAPS['GAPS_X']['PAD_X_10'],
+            pady=GAPS['GAPS_Y']['PAD_Y_10']
+        )
 
         parameters = [
             ("Group length:", "Group_length", self.Group_length),
@@ -737,71 +741,72 @@ class DRDH_processing:
         for row, (label_text, parameter_name, value) in enumerate(parameters):
             tk.Label(
                 frame,
-                text=label_text
+                text=label_text,
+                font=FONTS['DATA_FONT'],
+                bg=COLORS['PARAMETERS_BACKGROUND_COLOR']
             ).grid(
                 row=row,
                 column=0,
-                padx=10,
-                pady=5,
+                padx=GAPS['GAPS_X']['PAD_X_10'],
+                pady=GAPS['GAPS_Y']['PAD_Y_5'],
                 sticky="w"
             )
 
             var = tk.StringVar(
                 value="" if value is None else str(value)
             )
-
             self.experiment_parameter_vars[parameter_name] = var
 
             entry = tk.Entry(
                 frame,
                 width=ENTRY_WIDTH,
-                textvariable=var
+                textvariable=var,
+                font=FONTS['DATA_FONT']
             )
             self.experiment_parameter_entries[parameter_name] = entry
-
             entry.grid(
                 row=row,
                 column=1,
-                padx=10,
-                pady=5
+                padx=GAPS['GAPS_X']['PAD_X_10'],
+                pady=GAPS['GAPS_Y']['PAD_Y_5']
             )
 
-        button_frame = tk.Frame(frame)
+        button_frame = tk.Frame(frame, bg=COLORS['PARAMETERS_BACKGROUND_COLOR'])
         button_frame.grid(
             row=len(parameters),
             column=0,
             columnspan=2,
-            pady=(15, 0)
+            pady=GAPS['GAPS_Y']['PAD_Y_10_20']
         )
 
-        tk.Button(
+        self.apply_parameters_button = TestButtons(
             button_frame,
             text="Apply",
-            command=self.apply_experiment_parameters
-        ).pack(
-            side="left",
-            padx=5
+            command=self.apply_experiment_parameters,
+        )
+        self.apply_parameters_button.grid(
+            row=0, column=0,
+            padx=GAPS['GAPS_X']['PAD_X_5']
         )
 
-        tk.Button(
+        self.cancel_parameters_button = MainButtons(
             button_frame,
             text="Cancel",
-            command=self.close_experiment_parameters
-        ).pack(
-            side="left",
-            padx=5
+            command=self.close_experiment_parameters,
+        )
+        self.cancel_parameters_button.grid(
+            row=0, column=1,
+            padx=GAPS['GAPS_X']['PAD_X_5']
         )
 
         window.protocol(
             "WM_DELETE_WINDOW",
             self.close_experiment_parameters
         )
-
         window.bind(
             "<Return>",
             lambda event: self.apply_experiment_parameters()
         )
-
         window.bind(
             "<Escape>",
             lambda event: self.close_experiment_parameters()
