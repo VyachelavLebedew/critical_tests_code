@@ -23,7 +23,7 @@ from Messages import Messages
 import Formulas
 from Settings import (
     DECIMAL, show_info, FONTS, COLORS, GAPS, ITC_COMPUTATION_VALUES,
-    SPLITTER_MINSIZES, PLOT, CURSOR, TABLE
+SPLITTER_MINSIZES, PLOT, CURSOR, TABLE, ENTRY_WIDTH
 )
 
 mpl.rcParams['font.family'] = 'Times New Roman'
@@ -446,7 +446,422 @@ class ITC_processing:
             font=FONTS['DATA_FONT'],
             command=self.extended_cursor
         )
+        computed_parameters = tk.Menu(
+            self.menu_bar,
+            tearoff=1
+        )
 
+        self.menu_bar.add_cascade(
+            label="Computed parameters",
+            menu=computed_parameters
+        )
+
+        computed_parameters.add_command(
+            label="Edit parameters",
+            font=FONTS['DATA_FONT'],
+            command=self.open_computed_parameters
+        )
+    def open_computed_parameters(self) -> None:
+        """
+        Open a window for editing computed/reference ITC parameters.
+        Changes are applied only to the current ITC_processing instance.
+        """
+
+        if (
+            hasattr(self, "computed_parameters_window")
+            and self.computed_parameters_window.winfo_exists()
+        ):
+            self.computed_parameters_window.lift()
+            self.computed_parameters_window.focus_force()
+            return
+
+        window = tk.Toplevel(self.root)
+        window.title("Computed parameters")
+        window.resizable(False, False)
+
+        self.computed_parameters_window = window
+
+        frame = tk.Frame(
+            window,
+            bg=COLORS['BACKGROUND_COLOR']
+        )
+        frame.grid(
+            row=0,
+            column=0,
+            padx=GAPS['GAPS_X']['PAD_X_10'],
+            pady=GAPS['GAPS_Y']['PAD_Y_10']
+        )
+
+        parameters = [
+            (
+                "DTC:",
+                "DTC",
+                self.DTC,
+                False
+            ),
+            (
+                "ITC:",
+                "ITC_computed",
+                self.ITC_computed,
+                False
+            ),
+            (
+                "MTC:",
+                "MTC_computed",
+                self.MTC_computed,
+                False
+            ),
+            (
+                "DRDY:",
+                "DRDY_computed",
+                self.DRDY_computed,
+                True
+            ),
+            (
+                "Boric acid concentration:",
+                "boric_acid",
+                self.boric_acid,
+                True
+            ),
+            (
+                "DYDT:",
+                "DYDT",
+                self.DYDT,
+                False
+            ),
+        ]
+
+        self.computed_parameter_vars = {}
+        self.computed_parameter_entries = {}
+
+        for row, (label_text, parameter_name, value, optional) in enumerate(
+            parameters
+        ):
+            tk.Label(
+                frame,
+                text=label_text,
+                font=FONTS['TEXT_FONT'],
+                bg=COLORS['BACKGROUND_COLOR']
+            ).grid(
+                row=row,
+                column=0,
+                padx=GAPS['GAPS_X']['PAD_X_10'],
+                pady=GAPS['GAPS_Y']['PAD_Y_5'],
+                sticky="w"
+            )
+
+            var = tk.StringVar(
+                value="" if value is None else str(value)
+            )
+
+            self.computed_parameter_vars[parameter_name] = var
+
+            entry = tk.Entry(
+                frame,
+                width=ENTRY_WIDTH,
+                textvariable=var
+            )
+
+            self.computed_parameter_entries[parameter_name] = entry
+
+            entry.grid(
+                row=row,
+                column=1,
+                padx=GAPS['GAPS_X']['PAD_X_10'],
+                pady=GAPS['GAPS_Y']['PAD_Y_5']
+            )
+
+        button_frame = tk.Frame(
+            frame,
+            bg=COLORS['BACKGROUND_COLOR']
+        )
+
+        button_frame.grid(
+            row=len(parameters),
+            column=0,
+            columnspan=2,
+            pady=GAPS['GAPS_Y']['PAD_Y_10']
+        )
+
+        tk.Button(
+            button_frame,
+            text="Apply",
+            command=self.apply_computed_parameters
+        ).grid(
+            row=0,
+            column=0,
+            padx=GAPS['GAPS_X']['PAD_X_10']
+        )
+
+        tk.Button(
+            button_frame,
+            text="Cancel",
+            command=self.close_computed_parameters
+        ).grid(
+            row=0,
+            column=1,
+            padx=GAPS['GAPS_X']['PAD_X_10']
+        )
+
+        window.protocol(
+            "WM_DELETE_WINDOW",
+            self.close_computed_parameters
+        )
+
+        window.bind(
+            "<Return>",
+            lambda event: self.apply_computed_parameters()
+        )
+
+        window.bind(
+            "<Escape>",
+            lambda event: self.close_computed_parameters()
+        )
+
+        def apply_computed_parameters(self) -> None:
+            """
+            Validate and apply edited computed/reference parameters.
+            Changes affect only the current ITC_processing instance.
+            """
+
+            values = {}
+
+            required_parameters = {
+                "DTC",
+                "ITC_computed",
+                "MTC_computed",
+                "DYDT",
+            }
+
+            optional_parameters = {
+                "DRDY_computed",
+                "boric_acid",
+            }
+
+            for parameter_name, var in self.computed_parameter_vars.items():
+
+                text = var.get().strip().replace(",", ".")
+
+                if not text:
+                    if parameter_name in required_parameters:
+                        Messages.show(
+                            "error",
+                            "VALUE_ERROR",
+                            value_name=parameter_name,
+                            error="Value cannot be empty"
+                        )
+
+                        self.computed_parameter_entries[
+                            parameter_name
+                        ].focus_set()
+
+                        return
+
+                    values[parameter_name] = None
+                    continue
+
+                try:
+                    values[parameter_name] = float(text)
+
+                except ValueError as error:
+                    Messages.show(
+                        "error",
+                        "VALUE_ERROR",
+                        value_name=parameter_name,
+                        error=error
+                    )
+
+                    self.computed_parameter_entries[
+                        parameter_name
+                    ].focus_set()
+
+                    return
+
+            # ---------------------------------------------------------
+            # Validation
+            # ---------------------------------------------------------
+
+            if values["DTC"] > 0:
+                Messages.show(
+                    "error",
+                    "VALUE_POSTIVE",
+                    value="DTC",
+                    sign="negative"
+                )
+                return
+
+            if values["DYDT"] == 0:
+                Messages.show(
+                    "error",
+                    "VALUE_ERROR",
+                    value_name="DYDT",
+                    error="DYDT cannot be zero"
+                )
+                return
+
+            if (
+                    values["boric_acid"] is not None
+                    and values["boric_acid"] < 0
+            ):
+                Messages.show(
+                    "error",
+                    "VALUE_POSTIVE",
+                    value="Boric acid concentration",
+                    sign="positive"
+                )
+                return
+
+            # ---------------------------------------------------------
+            # Apply
+            # ---------------------------------------------------------
+
+            self.DTC = values["DTC"]
+            self.ITC_computed = values["ITC_computed"]
+            self.MTC_computed = values["MTC_computed"]
+            self.DRDY_computed = values["DRDY_computed"]
+            self.boric_acid = values["boric_acid"]
+            self.DYDT = values["DYDT"]
+
+            # Synchronize values used by the parent application.
+            self.main_app.DTC = self.DTC
+            self.main_app.ITC_computed = self.ITC_computed
+            self.main_app.MTC_computed = self.MTC_computed
+            self.main_app.DRDY_computed = self.DRDY_computed
+            self.main_app.boric_acid = self.boric_acid
+            self.main_app.DYDT = self.DYDT
+
+            self.update_table()
+
+            if hasattr(self, "canvas"):
+                self.canvas.draw_idle()
+
+            self.close_computed_parameters()
+    def apply_computed_parameters(self) -> None:
+        """
+        Validate and apply edited computed/reference parameters.
+        Changes affect only the current ITC_processing instance.
+        """
+
+        values = {}
+
+        required_parameters = {
+            "DTC",
+            "ITC_computed",
+            "MTC_computed",
+            "DYDT",
+        }
+
+        optional_parameters = {
+            "DRDY_computed",
+            "boric_acid",
+        }
+
+        for parameter_name, var in self.computed_parameter_vars.items():
+
+            text = var.get().strip().replace(",", ".")
+
+            if not text:
+                if parameter_name in required_parameters:
+                    Messages.show(
+                        "error",
+                        "VALUE_ERROR",
+                        value_name=parameter_name,
+                        error="Value cannot be empty"
+                    )
+
+                    self.computed_parameter_entries[
+                        parameter_name
+                    ].focus_set()
+
+                    return
+
+                values[parameter_name] = None
+                continue
+
+            try:
+                values[parameter_name] = float(text)
+
+            except ValueError as error:
+                Messages.show(
+                    "error",
+                    "VALUE_ERROR",
+                    value_name=parameter_name,
+                    error=error
+                )
+
+                self.computed_parameter_entries[
+                    parameter_name
+                ].focus_set()
+
+                return
+
+        # ---------------------------------------------------------
+        # Validation
+        # ---------------------------------------------------------
+
+        if values["DTC"] > 0:
+            Messages.show(
+                "error",
+                "VALUE_POSTIVE",
+                value="DTC",
+                sign="negative"
+            )
+            return
+
+        if values["DYDT"] == 0:
+            Messages.show(
+                "error",
+                "VALUE_ERROR",
+                value_name="DYDT",
+                error="DYDT cannot be zero"
+            )
+            return
+
+        if (
+            values["boric_acid"] is not None
+            and values["boric_acid"] < 0
+        ):
+            Messages.show(
+                "error",
+                "VALUE_POSTIVE",
+                value="Boric acid concentration",
+                sign="positive"
+            )
+            return
+
+        # ---------------------------------------------------------
+        # Apply
+        # ---------------------------------------------------------
+
+        self.DTC = values["DTC"]
+        self.ITC_computed = values["ITC_computed"]
+        self.MTC_computed = values["MTC_computed"]
+        self.DRDY_computed = values["DRDY_computed"]
+        self.boric_acid = values["boric_acid"]
+        self.DYDT = values["DYDT"]
+
+        # Synchronize values used by the parent application.
+        self.main_app.DTC = self.DTC
+        self.main_app.ITC_computed = self.ITC_computed
+        self.main_app.MTC_computed = self.MTC_computed
+        self.main_app.DRDY_computed = self.DRDY_computed
+        self.main_app.boric_acid = self.boric_acid
+        self.main_app.DYDT = self.DYDT
+
+        self.update_table()
+
+        if hasattr(self, "canvas"):
+            self.canvas.draw_idle()
+
+        self.close_computed_parameters()
+    def close_computed_parameters(self) -> None:
+        """Close the computed parameters window."""
+
+        if (
+            hasattr(self, "computed_parameters_window")
+            and self.computed_parameters_window.winfo_exists()
+        ):
+            self.computed_parameters_window.destroy()
     def create_table(self):
         """
         Create a table comprises the results:
@@ -957,6 +1372,9 @@ class ITC_processing:
 
         self.update_table()
 
+        if hasattr(self, "canvas"):
+            self.canvas.draw_idle()
+
     def update_table(self):
         """
         Fill the result table. Refill the table if the Decimal has
@@ -1185,12 +1603,29 @@ class ITC_processing:
 
         toolbar = NavigationToolbar2Tk(canvas, parent)
         toolbar.update()
+
+        self.toolbar = toolbar
+        self.canvas = canvas
+
+        toolbar.pack(side=tk.TOP, fill=tk.X)
+        canvas_widget.pack(fill=tk.BOTH, expand=True)
+        toolbar.update()
         toolbar.pack(side=tk.TOP, fill=tk.X)
         canvas_widget.pack(fill=tk.BOTH, expand=True)
 
         canvas.mpl_connect(
             "button_press_event",
             lambda event: self.on_plot_click(event, ax1)
+        )
+        canvas.mpl_connect(
+            "scroll_event",
+            lambda event: self.on_plot_scroll(
+                event,
+                ax1,
+                ax2,
+                ax3,
+                canvas
+            )
         )
 
         plot_obj = {
@@ -1249,7 +1684,47 @@ class ITC_processing:
                 lambda event, p=plot_obj: self.on_mouse_move(event, p)
             )
             plot_obj["cursor_cid"] = cid
+    def on_plot_scroll(
+        self,
+        event,
+        ax1,
+        ax2,
+        ax3,
+        canvas
+    ):
+        """
+        Zoom the plot along the X axis around the mouse cursor.
+        """
 
+        if event.inaxes not in (ax1, ax2, ax3):
+            return
+
+        if hasattr(self, "toolbar") and self.toolbar.mode:
+            return
+
+        if event.xdata is None:
+            return
+
+        current_xlim = ax1.get_xlim()
+
+        left, right = current_xlim
+        cursor_x = event.xdata
+
+        if event.button == "up":
+            scale = 0.8
+        elif event.button == "down":
+            scale = 1.25
+        else:
+            return
+
+        new_left = cursor_x - (cursor_x - left) * scale
+        new_right = cursor_x + (right - cursor_x) * scale
+
+        ax1.set_xlim(new_left, new_right)
+        ax2.set_xlim(new_left, new_right)
+        ax3.set_xlim(new_left, new_right)
+
+        canvas.draw_idle()
     def open_plot_in_new_window(self):
         """Create large plot in the window."""
         win = tk.Toplevel(self.root)
