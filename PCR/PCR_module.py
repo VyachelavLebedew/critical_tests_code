@@ -99,6 +99,12 @@ class PCR_module:
 
         self.selected_columns: List[str] = []
         self.NFME_parameters: List[str] = []
+        self.selected_column_buttons: Dict[str, tk.Button] = {}
+
+        # Columns assigned to each NFME parameter (keyed by the same
+        # names as NFME_parameters, e.g. "Time", "Group position").
+        # Used to lock/unlock the corresponding column buttons.
+        self.parameter_columns: Dict[str, List[str]] = {}
 
         # File headers used for every NFME parameter, keyed by attribute
         # name ('Time', 'Temperature', 'Reactivity', 'Pressure'). Lets
@@ -761,6 +767,9 @@ class PCR_module:
         getattr(self, attr_name).clear()
         if attr_name == 'NFME_parameters':
             self.reset_parameters('NFME')
+            for columns in self.parameter_columns.values():
+                self.set_column_buttons_state(columns, disabled=False)
+            self.parameter_columns.clear()
 
             self.time_required_label.config(text="⏱ Time :1")
             self.temparature_required_label.config(text="⏱ Temperature")
@@ -812,6 +821,14 @@ class PCR_module:
         removed_params = []
         for index in reversed(selected):
             removed_params += [params[index]]
+            if attr_name == 'NFME_parameters':
+                removed_columns = self.parameter_columns.pop(
+                    params[index], None
+                )
+                if removed_columns:
+                    self.set_column_buttons_state(
+                        removed_columns, disabled=False
+                    )
             del params[index]
             listbox.delete(index)
 
@@ -979,7 +996,7 @@ class PCR_module:
                     selected=len(self.selected_columns)
                     )
                 if not response:
-                    self.selected_columns.clear()
+                    self.clear_selected_column_buttons()
                     return
 
         data: pd.DataFrame = self.df[self.selected_columns]
@@ -1001,7 +1018,7 @@ class PCR_module:
                         )
 
                     if not response:
-                        self.selected_columns.clear()
+                        self.clear_selected_column_buttons()
                         return
                     break
 
@@ -1016,7 +1033,7 @@ class PCR_module:
                                       col=col,
                                       value=s
                                       )
-                        self.selected_columns.clear()
+                        self.clear_selected_column_buttons()
                         return
 
             invalid_values = series[~series.between(min_val, max_val)]
@@ -1029,7 +1046,7 @@ class PCR_module:
                     col=col
                     )
                 if not response:
-                    self.selected_columns.clear()
+                    self.clear_selected_column_buttons()
                     return
 
         result: pd.Series = (
@@ -1042,6 +1059,7 @@ class PCR_module:
         # Remember which file headers were used for this NFME parameter,
         # so PCR_processing can re-resolve them by name in another file.
         self.column_headers[rules["attr"]] = list(self.selected_columns)
+        self.parameter_columns[selected_param] = list(self.selected_columns)
 
         label = rules["label"](self)
         label.config(text=rules["label_text"])
@@ -1049,6 +1067,9 @@ class PCR_module:
         if selected_param not in self.NFME_parameters:
             self.NFME_parameters.append(selected_param)
 
+        # Columns just assigned to a parameter become locked: visually
+        # and functionally unavailable until the parameter is cleared.
+        self.set_column_buttons_state(self.selected_columns, disabled=True)
         self.selected_columns.clear()
 
     def get_entry(self, entry, value_name: str) -> None:
@@ -1160,14 +1181,70 @@ class PCR_module:
 
     def get_button_name(self, button_name: str) -> None:
         """
-        The main aim is to bind NFME file and the button pressed.
+        Toggle selection of an NFME data column.
+
+        Selected columns remain visually pressed until the parameter
+        is assigned or the selection is cleared.
+        """
+        if button_name in self.selected_columns:
+            self.selected_columns.remove(button_name)
+
+            button = self.selected_column_buttons.get(button_name)
+            if button:
+                button.config(
+                    relief=tk.RAISED,
+                    bd=2
+                )
+        else:
+            self.selected_columns.append(button_name)
+
+            button = self.selected_column_buttons.get(button_name)
+            if button:
+                button.config(
+                    relief=tk.SUNKEN,
+                    bd=2
+                )
+
+    def clear_selected_column_buttons(self) -> None:
+        """
+        Reset visual selection of currently selected NFME column buttons.
+
+        Only touches columns picked but not yet assigned to a parameter
+        (self.selected_columns); buttons already locked to a parameter
+        are left untouched (see set_column_buttons_state).
+        """
+        for column_name in self.selected_columns:
+            button = self.selected_column_buttons.get(column_name)
+            if button:
+                button.config(
+                    relief=tk.RAISED,
+                    bd=2
+                )
+
+        self.selected_columns.clear()
+
+    def set_column_buttons_state(
+            self,
+            columns: List[str],
+            disabled: bool
+    ) -> None:
+        """
+        Enable or disable NFME column buttons for the given column names.
 
         Args:
-            button_name (str): Name of the column/parameter.
+            columns (List[str]): Column names to update.
+            disabled (bool): True to lock the buttons (column already
+                assigned to a parameter), False to make them clickable
+                again (parameter cleared).
         """
-        if self.selected_columns is None:
-            self.selected_columns = []
-        self.selected_columns += [button_name]
+        for column_name in columns:
+            button = self.selected_column_buttons.get(column_name)
+            if not button:
+                continue
+            if disabled:
+                button.config(state=tk.DISABLED, relief=tk.SUNKEN, bd=2)
+            else:
+                button.config(state=tk.NORMAL, relief=tk.RAISED, bd=2)
 
     def reset_parameters(self, *args: str) -> None:
         """
@@ -1217,6 +1294,7 @@ class PCR_module:
         self.selected_columns = []
         self.NFME_parameters = []
         self.computed_parameters = []
+        self.parameter_columns.clear()
 
         if hasattr(self, 'root_window'):
             self.root_window.config(menu=None)
@@ -1407,8 +1485,13 @@ class PCR_module:
                 text=column_name,
                 command=lambda name=column_name: self.get_button_name(name),
                 width=NFME_BUTTONS['BUTTONS_WIDTH'],
-                font=FONTS['DATA_FONT']
+                font=FONTS['DATA_FONT'],
+                relief=tk.RAISED,
+                bd=2
             )
+
+            self.selected_column_buttons[column_name] = button
+
             button.pack(
                 padx=GAPS['GAPS_X']['PAD_X_5'], pady=GAPS['GAPS_Y']['PAD_Y_2']
             )

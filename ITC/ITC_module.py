@@ -676,6 +676,8 @@ class ITC_module:
 
             if attr_name == 'NFME_parameters':
                 self.reset_parameters('NFME')
+                for columns in self.parameter_columns.values():
+                    self.set_column_buttons_state(columns, disabled=False)
                 self.parameter_columns.clear()
 
                 self.time_required_label.config(text="⏱ Time :1")
@@ -742,7 +744,13 @@ class ITC_module:
         for index in reversed(selected):
             removed_params += [params[index]]
             if attr_name == 'NFME_parameters':
-                self.parameter_columns.pop(params[index], None)
+                removed_columns = self.parameter_columns.pop(
+                    params[index], None
+                )
+                if removed_columns:
+                    self.set_column_buttons_state(
+                        removed_columns, disabled=False
+                    )
             del params[index]
             listbox.delete(index)
 
@@ -958,16 +966,15 @@ class ITC_module:
         self.parameter_columns[selected_param] = self.selected_columns.copy()
 
         label = rules["label"](self)
-
-        column_names = ", ".join(self.parameter_columns[selected_param])
-        label.config(
-            text=f"{rules['label_text']} [{column_names}]"
-        )
+        label.config(text=rules["label_text"])
 
         if selected_param not in self.NFME_parameters:
             self.NFME_parameters.append(selected_param)
 
-        self.clear_selected_column_buttons()
+        # Columns just assigned to a parameter become locked: visually
+        # and functionally unavailable until the parameter is cleared.
+        self.set_column_buttons_state(self.selected_columns, disabled=True)
+        self.selected_columns.clear()
 
     def get_entry(self, entry, value_name: str) -> None:
         """
@@ -1092,14 +1099,45 @@ class ITC_module:
                 )
 
     def clear_selected_column_buttons(self) -> None:
-        """Reset visual selection of all NFME column buttons."""
-        for button in self.selected_column_buttons.values():
-            button.config(
-                relief=tk.RAISED,
-                bd=2
-            )
+        """
+        Reset visual selection of currently selected NFME column buttons.
+
+        Only touches columns picked but not yet assigned to a parameter
+        (self.selected_columns); buttons already locked to a parameter
+        are left untouched (see set_column_buttons_state).
+        """
+        for column_name in self.selected_columns:
+            button = self.selected_column_buttons.get(column_name)
+            if button:
+                button.config(
+                    relief=tk.RAISED,
+                    bd=2
+                )
 
         self.selected_columns.clear()
+
+    def set_column_buttons_state(
+            self,
+            columns: List[str],
+            disabled: bool
+    ) -> None:
+        """
+        Enable or disable NFME column buttons for the given column names.
+
+        Args:
+            columns (List[str]): Column names to update.
+            disabled (bool): True to lock the buttons (column already
+                assigned to a parameter), False to make them clickable
+                again (parameter cleared).
+        """
+        for column_name in columns:
+            button = self.selected_column_buttons.get(column_name)
+            if not button:
+                continue
+            if disabled:
+                button.config(state=tk.DISABLED, relief=tk.SUNKEN, bd=2)
+            else:
+                button.config(state=tk.NORMAL, relief=tk.RAISED, bd=2)
 
     def reset_parameters(self, *args: str) -> None:
         """
