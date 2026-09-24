@@ -483,7 +483,7 @@ class ITC_processing:
 
         frame = tk.Frame(
             window,
-            bg=COLORS['BACKGROUND_COLOR']
+            bg=COLORS['PARAMETERS_BACKGROUND_COLOR']
         )
         frame.grid(
             row=0,
@@ -493,55 +493,23 @@ class ITC_processing:
         )
 
         parameters = [
-            (
-                "DTC:",
-                "DTC",
-                self.DTC,
-                False
-            ),
-            (
-                "ITC:",
-                "ITC_computed",
-                self.ITC_computed,
-                False
-            ),
-            (
-                "MTC:",
-                "MTC_computed",
-                self.MTC_computed,
-                False
-            ),
-            (
-                "DRDY:",
-                "DRDY_computed",
-                self.DRDY_computed,
-                True
-            ),
-            (
-                "Boric acid concentration:",
-                "boric_acid",
-                self.boric_acid,
-                True
-            ),
-            (
-                "DYDT:",
-                "DYDT",
-                self.DYDT,
-                False
-            ),
+            ("DTC:", "DTC", self.DTC),
+            ("ITC:", "ITC_computed", self.ITC_computed),
+            ("MTC:", "MTC_computed", self.MTC_computed),
+            ("DRDY:", "DRDY_computed", self.DRDY_computed),
+            ("Boric acid concentration:", "boric_acid", self.boric_acid),
+            ("DYDT:", "DYDT", self.DYDT),
         ]
 
         self.computed_parameter_vars = {}
         self.computed_parameter_entries = {}
 
-        for row, (label_text, parameter_name, value, optional) in enumerate(
-            parameters
-        ):
+        for row, (label_text, parameter_name, value) in enumerate(parameters):
             tk.Label(
                 frame,
                 text=label_text,
-                font=FONTS['TEXT_FONT'],
-                bg=COLORS['BACKGROUND_COLOR']
+                font=FONTS['DATA_FONT'],
+                bg=COLORS['PARAMETERS_BACKGROUND_COLOR']
             ).grid(
                 row=row,
                 column=0,
@@ -559,7 +527,8 @@ class ITC_processing:
             entry = tk.Entry(
                 frame,
                 width=ENTRY_WIDTH,
-                textvariable=var
+                textvariable=var,
+                font=FONTS['DATA_FONT']
             )
 
             self.computed_parameter_entries[parameter_name] = entry
@@ -573,34 +542,38 @@ class ITC_processing:
 
         button_frame = tk.Frame(
             frame,
-            bg=COLORS['BACKGROUND_COLOR']
+            bg=COLORS['PARAMETERS_BACKGROUND_COLOR']
         )
 
         button_frame.grid(
             row=len(parameters),
             column=0,
             columnspan=2,
-            pady=GAPS['GAPS_Y']['PAD_Y_10']
+            pady=GAPS['GAPS_Y']['PAD_Y_10_20']
         )
 
-        tk.Button(
+        self.apply_parameters_button = TestButtons(
             button_frame,
             text="Apply",
-            command=self.apply_computed_parameters
-        ).grid(
-            row=0,
-            column=0,
-            padx=GAPS['GAPS_X']['PAD_X_10']
+            command=self.apply_computed_parameters,
         )
 
-        tk.Button(
+        self.apply_parameters_button.grid(
+            row=0,
+            column=0,
+            padx=GAPS['GAPS_X']['PAD_X_5']
+        )
+
+        self.cancel_parameters_button = MainButtons(
             button_frame,
             text="Cancel",
-            command=self.close_computed_parameters
-        ).grid(
+            command=self.close_computed_parameters,
+        )
+
+        self.cancel_parameters_button.grid(
             row=0,
             column=1,
-            padx=GAPS['GAPS_X']['PAD_X_10']
+            padx=GAPS['GAPS_X']['PAD_X_5']
         )
 
         window.protocol(
@@ -618,124 +591,7 @@ class ITC_processing:
             lambda event: self.close_computed_parameters()
         )
 
-        def apply_computed_parameters(self) -> None:
-            """
-            Validate and apply edited computed/reference parameters.
-            Changes affect only the current ITC_processing instance.
-            """
 
-            values = {}
-
-            required_parameters = {
-                "DTC",
-                "ITC_computed",
-                "MTC_computed",
-                "DYDT",
-            }
-
-            optional_parameters = {
-                "DRDY_computed",
-                "boric_acid",
-            }
-
-            for parameter_name, var in self.computed_parameter_vars.items():
-
-                text = var.get().strip().replace(",", ".")
-
-                if not text:
-                    if parameter_name in required_parameters:
-                        Messages.show(
-                            "error",
-                            "VALUE_ERROR",
-                            value_name=parameter_name,
-                            error="Value cannot be empty"
-                        )
-
-                        self.computed_parameter_entries[
-                            parameter_name
-                        ].focus_set()
-
-                        return
-
-                    values[parameter_name] = None
-                    continue
-
-                try:
-                    values[parameter_name] = float(text)
-
-                except ValueError as error:
-                    Messages.show(
-                        "error",
-                        "VALUE_ERROR",
-                        value_name=parameter_name,
-                        error=error
-                    )
-
-                    self.computed_parameter_entries[
-                        parameter_name
-                    ].focus_set()
-
-                    return
-
-            # ---------------------------------------------------------
-            # Validation
-            # ---------------------------------------------------------
-
-            if values["DTC"] > 0:
-                Messages.show(
-                    "error",
-                    "VALUE_POSTIVE",
-                    value="DTC",
-                    sign="negative"
-                )
-                return
-
-            if values["DYDT"] == 0:
-                Messages.show(
-                    "error",
-                    "VALUE_ERROR",
-                    value_name="DYDT",
-                    error="DYDT cannot be zero"
-                )
-                return
-
-            if (
-                    values["boric_acid"] is not None
-                    and values["boric_acid"] < 0
-            ):
-                Messages.show(
-                    "error",
-                    "VALUE_POSTIVE",
-                    value="Boric acid concentration",
-                    sign="positive"
-                )
-                return
-
-            # ---------------------------------------------------------
-            # Apply
-            # ---------------------------------------------------------
-
-            self.DTC = values["DTC"]
-            self.ITC_computed = values["ITC_computed"]
-            self.MTC_computed = values["MTC_computed"]
-            self.DRDY_computed = values["DRDY_computed"]
-            self.boric_acid = values["boric_acid"]
-            self.DYDT = values["DYDT"]
-
-            # Synchronize values used by the parent application.
-            self.main_app.DTC = self.DTC
-            self.main_app.ITC_computed = self.ITC_computed
-            self.main_app.MTC_computed = self.MTC_computed
-            self.main_app.DRDY_computed = self.DRDY_computed
-            self.main_app.boric_acid = self.boric_acid
-            self.main_app.DYDT = self.DYDT
-
-            self.update_table()
-
-            if hasattr(self, "canvas"):
-                self.canvas.draw_idle()
-
-            self.close_computed_parameters()
     def apply_computed_parameters(self) -> None:
         """
         Validate and apply edited computed/reference parameters.
@@ -744,38 +600,12 @@ class ITC_processing:
 
         values = {}
 
-        required_parameters = {
-            "DTC",
-            "ITC_computed",
-            "MTC_computed",
-            "DYDT",
-        }
-
-        optional_parameters = {
-            "DRDY_computed",
-            "boric_acid",
-        }
-
         for parameter_name, var in self.computed_parameter_vars.items():
-
             text = var.get().strip().replace(",", ".")
 
             if not text:
-                if parameter_name in required_parameters:
-                    Messages.show(
-                        "error",
-                        "VALUE_ERROR",
-                        value_name=parameter_name,
-                        error="Value cannot be empty"
-                    )
-
-                    self.computed_parameter_entries[
-                        parameter_name
-                    ].focus_set()
-
-                    return
-
-                values[parameter_name] = None
+                # Пустое поле означает: оставить текущее значение без изменений
+                values[parameter_name] = getattr(self, parameter_name)
                 continue
 
             try:
