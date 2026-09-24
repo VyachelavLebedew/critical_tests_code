@@ -597,6 +597,13 @@ class DRDH_processing:
         )
         self.fix2.grid(row=4, column=3)
 
+        self.delete_last_step_button = TestButtons(
+            self.DRDH_processing_frame,
+            text="Remove previous step",
+            command=self.delete_last_step,
+        )
+        self.delete_last_step_button.grid(row=4, column=4)
+
         self.complete_button = TestButtons(
               self.DRDH_processing_frame,
               text='Complete',
@@ -2234,6 +2241,193 @@ class DRDH_processing:
         for plot in self.plot_windows:
             plot["canvas"].draw_idle()
 
+    def delete_last_step(self):
+        """
+        Delete the last accepted DRDH step and return the processing
+        to the state that existed immediately before that step.
+        """
+
+        # The first row of results_table is the initial state,
+        # not a measured step.
+        if len(getattr(self, "results_table", [])) <= 1:
+            return
+
+        # Remove the DRDC summary, if it is currently displayed.
+        self.clear_drdc_block()
+
+        # ---------------------------------------------------------
+        # Save the state of the last step before modifying anything.
+        # ---------------------------------------------------------
+        last_step_line = None
+
+        if self.finished_lines:
+            last_step_line = self.finished_lines.pop()
+
+        # The current interval1 is the second line of the last step.
+        last_step_second_line = self.selection_state["interval1"]
+
+        # ---------------------------------------------------------
+        # Remove the last result from the results table.
+        # ---------------------------------------------------------
+        children = self.tree.get_children()
+
+        if children:
+            self.tree.delete(children[-1])
+
+        self.results_table.pop()
+
+        # Restore cumulative reactivity.
+        self.cumulative_R = self.results_table[-1]["R"]
+
+        # ---------------------------------------------------------
+        # Remove the last accepted point from the DRDH plot.
+        # ---------------------------------------------------------
+        if self.drdh_points:
+            self.drdh_points.pop()
+
+        # ---------------------------------------------------------
+        # Restore selection state.
+        #
+        # If there are previous accepted steps:
+        #
+        #     previous step's Fix 2 line
+        #             ↓
+        #         becomes Fix 1
+        #
+        # The user must press Fix 1 again before selecting
+        # the next pair of points.
+        # ---------------------------------------------------------
+        if self.finished_lines:
+
+            self.selection_state["interval1"] = {
+                "left": last_step_line["left"],
+                "right": last_step_line["right"],
+                "fixed": True,
+                "dots": True,
+            }
+
+            self.selection_state["interval2"] = {
+                "left": None,
+                "right": None,
+                "fixed": False,
+                "dots": False,
+            }
+
+            self.fix1_done = False
+            self.line1_locked = True
+            self.active_interval = 1
+
+            self.last_right_click_index = (
+                last_step_line["right"]["index"]
+            )
+
+        # ---------------------------------------------------------
+        # If we deleted the very first step, restore the state
+        # that existed immediately before its Proceed.
+        #
+        # In this case:
+        #   last_step_line      = original Fix 1
+        #   last_step_second_line = original Fix 2
+        # ---------------------------------------------------------
+        else:
+
+            self.selection_state["interval1"] = {
+                "left": last_step_line["left"],
+                "right": last_step_line["right"],
+                "fixed": True,
+                "dots": True,
+            }
+
+            self.selection_state["interval2"] = {
+                "left": last_step_second_line["left"],
+                "right": last_step_second_line["right"],
+                "fixed": True,
+                "dots": True,
+            }
+
+            self.fix1_done = True
+            self.line1_locked = False
+            self.active_interval = 2
+
+            self.last_right_click_index = (
+                last_step_second_line["right"]["index"]
+            )
+
+        # ---------------------------------------------------------
+        # Restore the plot.
+        # ---------------------------------------------------------
+        for plot in self.plot_windows:
+
+            # Remove all currently drawn active elements.
+            for key in ("interval1", "interval2"):
+                art = plot["interval_artists"][key]
+
+                for artist_key in ("left", "right", "line"):
+                    artist = art[artist_key]
+
+                    if artist is not None:
+                        artist.remove()
+
+                plot["interval_artists"][key] = {
+                    "left": None,
+                    "right": None,
+                    "line": None,
+                }
+
+            # Remove the last finished line from this plot.
+            if plot["finished_lines"]:
+                line = plot["finished_lines"].pop()
+                line.remove()
+
+            # Remove temporary movement/intersection graphics.
+            if plot.get("move_line"):
+                plot["move_line"].remove()
+                plot["move_line"] = None
+
+            for point in plot.get("green_points", []):
+                point.remove()
+
+            plot["green_points"] = []
+
+            # Redraw active intervals from the restored state.
+            for key in ("interval1", "interval2"):
+                state = self.selection_state[key]
+                art = plot["interval_artists"][key]
+
+                if state["dots"]:
+                    if state["left"]:
+                        art["left"] = self.draw_selection_point(
+                            plot, state["left"]
+                        )
+
+                    if state["right"]:
+                        art["right"] = self.draw_selection_point(
+                            plot, state["right"]
+                        )
+
+                if state["left"] and state["right"]:
+                    art["line"] = self.draw_interval_line(
+                        plot, state
+                    )
+
+            plot["canvas"].draw_idle()
+
+        self.show_move_line = False
+        self.show_intersections = False
+
+        # Remove the vertical line state.
+        for attr in ("t", "t_move", "p1_R", "p2_R"):
+            if hasattr(self, attr):
+                delattr(self, attr)
+
+        # Refresh all dependent UI.
+        self.refresh_line_tables()
+        self.refresh_results_table()
+        self.draw_drdh_plot()
+        self.update_hint()
+
+        if self.values_window_alive():
+            self.update_drdh_table()
     def complete(self):
         """
         Finish the processing and determine the DRDC.
@@ -2648,7 +2842,7 @@ class DRDH_processing:
             self.plot_windows.remove(plot_obj)
 
         for attr in ("large_plot_obj", "large_status_label",
-                     "Proceed_button_large", "fix1_large", "fix2_large",
+                     "Proceed_button_large", "fix1_large", "fix2_large", "delete_last_step_button",
                      "complete_large"):
             if hasattr(self, attr):
                 delattr(self, attr)
@@ -2701,6 +2895,13 @@ class DRDH_processing:
             command=self.fix_second
         )
         self.fix2_large.pack(side=tk.LEFT, padx=10, pady=10)
+
+        self.delete_last_step_button = TestButtons(
+            frame,
+            text="Remove previous step",
+            command=self.delete_last_step,
+        )
+        self.delete_last_step_button.pack(side=tk.LEFT, padx=10, pady=10)
 
         self.complete_large = TestButtons(
             frame,

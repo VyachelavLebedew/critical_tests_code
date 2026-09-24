@@ -25,8 +25,9 @@ The hint in the lower-right corner always shows what is expected next.
 2. What is on screen
 
 On the left is the experiment plot: reactivity as a solid dark-blue line
-(left axis) and the group positions as dashed colored lines (right axis). On
-the right is the results table. The splitter between them adjusts their size.
+(left axis) and the group positions as dashed colored lines (right axis).
+The plot scale can be adjusted using the mouse wheel.  On the right is 
+the results table. The splitter between them adjusts their size.
 
 Colors on the plot:
     • Amber line - the interval line being defined right now
@@ -54,6 +55,9 @@ spans the movement; otherwise the step is not accepted.
 "No" to remove it and re-select the second line. The second line then becomes
 the first line of the next step, so the intervals stay continuous: press
 "Fix 1" to accept it and continue.
+
+If one or more group movements are incorrectly measured, click 
+"Remove previous step" to revert to the previous step.
 
 
 4. Finishing - the DRDC
@@ -95,6 +99,9 @@ columns are written to the saved files.
     • Plot - "Plot in new window" opens a synchronized enlarged copy;
       "Extended cursor" toggles the crosshair with the current values.
     • Current_actions - the DRDH plot and the Current values window (section 5).
+    • Computed parameters - "Edit computed parameters" opens a window for
+      modifying the calculated parameters without reverting to the parameter 
+      window.
     • INFO - this guide.
 
 
