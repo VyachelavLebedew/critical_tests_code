@@ -138,6 +138,14 @@ class PCR_processing:
         """True while the current mode is 'with steam extraction'."""
         return self.steam_mode == "With steam extraction"
 
+    @staticmethod
+    def widget_alive(widget) -> bool:
+        """True if the widget still exists (was not destroyed by the user)."""
+        try:
+            return bool(widget.winfo_exists())
+        except Exception:
+            return False
+
     # ------------------------------------------------------------------ #
     #  Window                                                            #
     # ------------------------------------------------------------------ #
@@ -226,6 +234,16 @@ class PCR_processing:
             label="Show / hide legend",
             font=FONTS['DATA_FONT'],
             command=self.toggle_legend
+        )
+
+        parameters_menu = tk.Menu(self.menu_bar, tearoff=0)
+        self.menu_bar.add_cascade(
+            label="Computed parameters", menu=parameters_menu
+        )
+        parameters_menu.add_command(
+            label="Edit parameters",
+            font=FONTS['DATA_FONT'],
+            command=self.open_experiment_parameters
         )
 
         units = tk.Menu(self.menu_bar, tearoff=0)
@@ -463,6 +481,250 @@ class PCR_processing:
         )
         entry.bind("<Return>", lambda e: save())
 
+    # ------------------------------------------------------------------ #
+    #  Computed parameters (menu: Computed parameters -> Edit parameters)#
+    # ------------------------------------------------------------------ #
+    def open_experiment_parameters(self) -> None:
+        """
+        Open the "Computed parameters" window, letting ITC, PrCR, MC,
+        beta, sigma(DRDY), the PCR reference and the base window be
+        edited after the module has been entered, the same as
+        "Computed parameters -> Edit parameters" in DRDH_processing.
+        """
+        if (
+            hasattr(self, "experiment_parameters_window")
+            and self.widget_alive(self.experiment_parameters_window)
+        ):
+            self.experiment_parameters_window.lift()
+            self.experiment_parameters_window.focus_force()
+            return
+
+        window = tk.Toplevel(self.root)
+        window.title("Computed parameters")
+        window.resizable(False, False)
+        window.config(bg=COLORS['PARAMETERS_BACKGROUND_COLOR'])
+        self.experiment_parameters_window = window
+
+        frame = tk.Frame(window, bg=COLORS['PARAMETERS_BACKGROUND_COLOR'])
+        frame.grid(
+            row=0, column=0,
+            padx=GAPS['GAPS_X']['PAD_X_10'],
+            pady=GAPS['GAPS_Y']['PAD_Y_10']
+        )
+
+        parameters = [
+            ("ITC (α_T), pcm/°C:", "alpha_T", self.alpha_T),
+            ("PrCR (α_P), pcm/MPa:", "alpha_P", self.alpha_P),
+            ("MC, MJ/°C:", "MC", self.MC),
+            ("β_eff, %:", "beta", self.beta),
+            ("σ(DRDY), %:", "sigma_DRDY", self.sigma_DRDY),
+            ("PCR reference, pcm/MWt:", "PCR_reference", self.PCR_reference),
+            ("Base window, s:", "base", self.base),
+        ]
+
+        self.experiment_parameter_vars = {}
+        self.experiment_parameter_entries = {}
+
+        for row, (label_text, parameter_name, value) in enumerate(parameters):
+            tk.Label(
+                frame,
+                text=label_text,
+                font=FONTS['DATA_FONT'],
+                bg=COLORS['PARAMETERS_BACKGROUND_COLOR']
+            ).grid(
+                row=row,
+                column=0,
+                padx=GAPS['GAPS_X']['PAD_X_10'],
+                pady=GAPS['GAPS_Y']['PAD_Y_5'],
+                sticky="w"
+            )
+
+            var = tk.StringVar(
+                value="" if value is None else str(value)
+            )
+            self.experiment_parameter_vars[parameter_name] = var
+
+            entry = tk.Entry(
+                frame,
+                width=15,
+                textvariable=var,
+                font=FONTS['DATA_FONT']
+            )
+            self.experiment_parameter_entries[parameter_name] = entry
+            entry.grid(
+                row=row,
+                column=1,
+                padx=GAPS['GAPS_X']['PAD_X_10'],
+                pady=GAPS['GAPS_Y']['PAD_Y_5']
+            )
+
+        button_frame = tk.Frame(frame, bg=COLORS['PARAMETERS_BACKGROUND_COLOR'])
+        button_frame.grid(
+            row=len(parameters),
+            column=0,
+            columnspan=2,
+            pady=GAPS['GAPS_Y']['PAD_Y_10_20']
+        )
+
+        self.apply_parameters_button = TestButtons(
+            button_frame,
+            text="Apply",
+            command=self.apply_experiment_parameters,
+        )
+        self.apply_parameters_button.grid(
+            row=0, column=0,
+            padx=GAPS['GAPS_X']['PAD_X_5']
+        )
+
+        self.cancel_parameters_button = MainButtons(
+            button_frame,
+            text="Cancel",
+            command=self.close_experiment_parameters,
+        )
+        self.cancel_parameters_button.grid(
+            row=0, column=1,
+            padx=GAPS['GAPS_X']['PAD_X_5']
+        )
+
+        window.protocol(
+            "WM_DELETE_WINDOW",
+            self.close_experiment_parameters
+        )
+        window.bind(
+            "<Return>",
+            lambda event: self.apply_experiment_parameters()
+        )
+        window.bind(
+            "<Escape>",
+            lambda event: self.close_experiment_parameters()
+        )
+
+    def apply_experiment_parameters(self) -> None:
+        """
+        Validate and apply the edited computed parameters.
+
+        Changes are applied to the current PCR_processing instance only,
+        and take effect the next time "Proceed" is pressed.
+        """
+        values = {}
+
+        required_parameters = {"alpha_T", "alpha_P", "MC", "beta", "base"}
+        optional_parameters = {"sigma_DRDY", "PCR_reference"}
+
+        for parameter_name, var in self.experiment_parameter_vars.items():
+
+            text = var.get().strip().replace(",", ".")
+
+            # ---------------------------------------------------------
+            # Empty value
+            # ---------------------------------------------------------
+            if not text:
+
+                if parameter_name in required_parameters:
+                    Messages.show(
+                        "error",
+                        "VALUE_ERROR",
+                        value_name=parameter_name,
+                        error="Value cannot be empty"
+                    )
+
+                    self.experiment_parameter_entries[
+                        parameter_name
+                    ].focus_set()
+
+                    return
+
+                # Optional parameter
+                values[parameter_name] = None
+                continue
+
+            # ---------------------------------------------------------
+            # Convert to float
+            # ---------------------------------------------------------
+            try:
+                values[parameter_name] = float(text)
+
+            except ValueError as error:
+                Messages.show(
+                    "error",
+                    "VALUE_ERROR",
+                    value_name=parameter_name,
+                    error=error
+                )
+
+                self.experiment_parameter_entries[
+                    parameter_name
+                ].focus_set()
+
+                return
+
+        # ---------------------------------------------------------
+        # Validation
+        # ---------------------------------------------------------
+        if values["MC"] <= 0:
+            Messages.show(
+                "error", "VALUE_POSTIVE", value="MC", sign="positive"
+            )
+            return
+
+        if values["beta"] <= 0:
+            Messages.show(
+                "error", "VALUE_POSTIVE", value="β_eff", sign="positive"
+            )
+            return
+
+        if values["base"] <= 0:
+            Messages.show(
+                "error", "VALUE_POSTIVE",
+                value="Base window", sign="positive"
+            )
+            return
+
+        if values["sigma_DRDY"] is not None and values["sigma_DRDY"] < 0:
+            Messages.show(
+                "error", "VALUE_POSTIVE", value="σ(DRDY)", sign="positive"
+            )
+            return
+
+        # ---------------------------------------------------------
+        # Apply
+        # ---------------------------------------------------------
+        self.alpha_T = values["alpha_T"]
+        self.alpha_P = values["alpha_P"]
+        self.MC = values["MC"]
+        self.beta = values["beta"]
+        self.sigma_DRDY = values["sigma_DRDY"]
+        self.PCR_reference = values["PCR_reference"]
+        self.base = int(values["base"])
+
+        # Update temporary fields to normalized values.
+        for parameter_name, value in values.items():
+            self.experiment_parameter_vars[parameter_name].set(
+                "" if value is None else str(value)
+            )
+
+        # The reference and beta may affect already computed results.
+        self.compute_mean()
+        self.refresh_table()
+
+        self.close_experiment_parameters()
+
+    def close_experiment_parameters(self) -> None:
+        """Close the "Computed parameters" window."""
+        if (
+            hasattr(self, "experiment_parameters_window")
+            and self.widget_alive(self.experiment_parameters_window)
+        ):
+            self.experiment_parameters_window.destroy()
+
+        for attr in (
+            "experiment_parameters_window",
+            "experiment_parameter_vars",
+            "experiment_parameter_entries",
+        ):
+            if hasattr(self, attr):
+                delattr(self, attr)
+
     def create_table(self) -> None:
         """Right pane: one column per procedure plus the weighted mean."""
         style = ttk.Style(self.root)
@@ -522,6 +784,66 @@ class PCR_processing:
             )
 
         self.tree.pack(fill=tk.BOTH, expand=True)
+        self.tree.bind("<Button-1>", self.on_tree_click)
+        self.tree.bind("<Control-c>", self.copy_from_entry)
+        self.tree.bind("<Control-C>", self.copy_from_entry)
+
+    def on_tree_click(self, event):
+        """
+        Handle a click on a results-table cell.
+
+        Shows the cell content in a small read-only entry, so that the
+        computed parameter can be selected and copied (Ctrl+C) - the same
+        behaviour as in DRDH_processing.
+        """
+        self.close_active_entry()
+
+        region = self.tree.identify("region", event.x, event.y)
+        if region != "cell":
+            return "break"
+
+        row_id = self.tree.identify_row(event.y)
+        column = self.tree.identify_column(event.x)
+
+        if not row_id or not column:
+            return "break"
+
+        col_index = int(column.replace("#", "")) - 1
+        bbox = self.tree.bbox(row_id, column)
+        if not bbox:
+            return "break"
+
+        x, y, width, height = bbox
+        value = self.tree.item(row_id, "values")[col_index]
+
+        entry = ttk.Entry(self.tree)
+        entry.insert(0, value)
+        entry.state(["readonly"])
+        entry.select_range(0, tk.END)
+        entry.focus()
+
+        entry.place(x=x, y=y, width=width, height=height)
+
+        self.active_entry = entry
+
+        return "break"
+
+    def close_active_entry(self):
+        """Close (destroy) the cell-copy entry, if any is open."""
+        if self.active_entry is not None:
+            self.active_entry.destroy()
+            self.active_entry = None
+
+    def copy_from_entry(self, event=None):
+        """Copy the content of the currently open cell entry."""
+        if self.active_entry is None:
+            return "break"
+
+        text = self.active_entry.get()
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+
+        return "break"
 
     def _react_from_pcm(self, pcm):
         """Convert a pcm value to the current display unit."""
@@ -646,10 +968,17 @@ class PCR_processing:
             legend.set_visible(self.legend_visible)
 
         canvas = FigureCanvasTkAgg(fig, master=parent)
+        canvas_widget = canvas.get_tk_widget()
+        canvas_widget.bind(
+            "<Enter>", lambda e: canvas_widget.config(cursor="crosshair")
+        )
+        canvas_widget.bind(
+            "<Leave>", lambda e: canvas_widget.config(cursor="arrow")
+        )
         toolbar = NavigationToolbar2Tk(canvas, parent)
         toolbar.update()
         toolbar.pack(side=tk.TOP, fill=tk.X)
-        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        canvas_widget.pack(fill=tk.BOTH, expand=True)
         canvas.mpl_connect(
             "button_press_event",
             lambda e: self.on_plot_click(e, ax1)
@@ -657,7 +986,7 @@ class PCR_processing:
         canvas.draw()
 
         plot_obj = {
-            "fig": fig, "ax1": ax1, "ax2": ax2, "ax3": ax3,
+            "fig": fig, "ax1": ax1, "ax2": ax2, "ax3": ax3, "ax4": ax4,
             "canvas": canvas, "toolbar": toolbar,
             "base_line": None, "tau0_line": None, "tau1_line": None,
             "is_main": is_main,
@@ -691,6 +1020,11 @@ class PCR_processing:
             ),
             "cursor_cid": None,
         }
+        canvas.mpl_connect(
+            "scroll_event",
+            lambda event, p=plot_obj: self.on_plot_scroll(event, p)
+        )
+
         self.plot_windows.append(plot_obj)
         self.redraw_markers()
 
@@ -724,6 +1058,48 @@ class PCR_processing:
         target = mdates.date2num(clicked)
         nums = mdates.date2num(self.times)
         return int(np.argmin(np.abs(nums - target)))
+
+    def on_plot_scroll(self, event, plot):
+        """
+        Zoom the plot horizontally with the mouse wheel, around the cursor.
+
+        The X axis is shared by ax1, ax2, ax3 (and ax4, if present - the
+        group-position axis). The Y axes remain unchanged. Same behaviour
+        as in DRDH_processing.
+        """
+        axes = [plot["ax1"], plot["ax2"], plot["ax3"]]
+        if plot.get("ax4") is not None:
+            axes.append(plot["ax4"])
+
+        if event.inaxes not in axes:
+            return
+
+        # Do not interfere with an explicitly selected toolbar mode.
+        if plot["toolbar"].mode != '':
+            return
+
+        if event.xdata is None:
+            return
+
+        # Scroll up -> zoom in. Scroll down -> zoom out.
+        if event.button == "up":
+            scale = 0.8
+        elif event.button == "down":
+            scale = 1.25
+        else:
+            return
+
+        ax1 = plot["ax1"]
+        x_min, x_max = ax1.get_xlim()
+        x_center = event.xdata
+
+        new_x_min = x_center + (x_min - x_center) * scale
+        new_x_max = x_center + (x_max - x_center) * scale
+
+        for ax in axes:
+            ax.set_xlim(new_x_min, new_x_max)
+
+        plot["canvas"].draw_idle()
 
     def heating_rate(self, index: int) -> float:
         """
