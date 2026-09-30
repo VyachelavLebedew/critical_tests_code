@@ -36,6 +36,7 @@ from DRDH import DRDH_module
 from PCR import PCR_module
 from Symmetry import Symmetry_module
 from Criticality import Criticality_module
+from Imax import Imax_module
 
 
 class Main:
@@ -211,8 +212,9 @@ class Main:
         self.Criticality_interface.create_Criticality_window()
 
     def imax(self) -> None:
-        """Placeholder for the Imax experiment."""
-        pass
+        """Launch the Imax computation process via Imax_Module file"""
+        self.Imax_interface = Imax_module(self.root, self)
+        self.Imax_interface.create_Imax_window()
 
     def check_data_loaded(self) -> None:
         """
