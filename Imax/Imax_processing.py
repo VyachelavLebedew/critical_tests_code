@@ -22,6 +22,9 @@ from Settings import (
 
 mpl.rcParams['font.family'] = 'Times New Roman'
 
+# Allowed window of the heating rate, s (the same as in Imax_module)
+IMAX_BASE_RANGE = (2, 3600)
+
 
 class Imax_processing:
     """Find current values corresponding to a requested reactor heating rate.
@@ -30,7 +33,9 @@ class Imax_processing:
     requested heating rate (degC/h) and a divisor. For every current column the
     program finds the point of the interval whose heating rate is the closest
     to the requested one and outputs the current at that point divided by the
-    divisor.
+    divisor (Imax). If MC (heat capacity, MWt/(°C/h)) was given in the module,
+    Pmax = Imax * MC is also calculated for every current column.
+    The window (base, s) for the heating rate is also set in the module.
     """
 
     def __init__(self, root: tk.Widget, main_app: Any) -> None:
@@ -43,14 +48,25 @@ class Imax_processing:
         self.Temperature = getattr(main_app, 'Temperature', None)
         self.Current = getattr(main_app, 'Current', None)
         self.Current_columns = list(getattr(main_app, 'Current_columns', []))
+        # Window of the heating rate, s (default 60) and optional heat capacity
+        self.base: int = int(getattr(main_app, 'base', 60) or 60)
+        self.MC: Optional[float] = getattr(main_app, 'MC', None)
 
         self.selection_left: Optional[int] = None
         self.selection_right: Optional[int] = None
         self.selection_artists = []
-        self.results: list[dict[str, Any]] = []
-        self.point_markers: list[Any] = []
+        # One entry per table row: the search parameters and the found row.
+        # They are kept so that the rows can be recalculated when MC / base
+        # are edited.
+        self.steps: list[dict[str, Any]] = []
+        self.point_marker: Optional[Any] = None
         self.active_entry: Optional[ttk.Entry] = None
         self._zoom_factor = 1.25
+
+    @property
+    def results(self) -> list[dict[str, Any]]:
+        """Rows currently shown in the table."""
+        return [step['row'] for step in self.steps]
 
     def create_Imax_processing_window(self) -> None:
         root_window = self.root.winfo_toplevel()
@@ -82,6 +98,17 @@ class Imax_processing:
         info.add_command(
             label='INFO', font=FONTS['DATA_FONT'],
             command=lambda: show_info(self.root, 'Imax/info_processing.txt')
+        )
+
+        computed = tk.Menu(self.menu_bar, tearoff=1)
+        self.menu_bar.add_cascade(label='Computed parameters', menu=computed)
+        computed.add_command(
+            label='Show computed parameters', font=FONTS['DATA_FONT'],
+            command=self.show_computed_parameters
+        )
+        computed.add_command(
+            label='Edit computed parameters', font=FONTS['DATA_FONT'],
+            command=self.edit_computed_parameters
         )
 
         save = tk.Menu(self.menu_bar, tearoff=1)
@@ -171,7 +198,9 @@ class Imax_processing:
 
         # Heating rate of every point, °C/h. Computed once: it is used both
         # for the optional curve on the plot and by Proceed.
-        self.rate_values = self._heating_rate_per_hour(self.temperature_values)
+        self.rate_values = self._heating_rate_per_hour(
+            self.temperature_values, self.base
+        )
 
         self.fig = Figure(figsize=(7, 5), constrained_layout=True)
         self.ax = self.fig.add_subplot(111)
@@ -194,9 +223,14 @@ class Imax_processing:
         )
         self.ax2.set_ylabel(
             'Temperature rise speed, °C/h',
-            fontsize=PLOT['PLOT_LABEL_SIZE'], color=self.rate_color
+            fontsize=PLOT['PLOT_LABEL_SIZE']
         )
-        self.ax2.tick_params(axis='y', colors=self.rate_color)
+        # Requested heating rate (the 'Heating rate' entry), dashed. Its
+        # position is set by update_target_line once the entry exists.
+        self.target_line = self.ax2.axhline(
+            0.0, color=self.rate_color, linestyle='--', linewidth=1.2,
+            label='Target speed'
+        )
         self.ax2.set_visible(False)
         self.ax2.set_in_layout(False)
 
@@ -257,6 +291,7 @@ class Imax_processing:
         lines = [self.temperature_line]
         if self.ax2.get_visible():
             lines.append(self.rate_line)
+            lines.append(self.target_line)
         if self.ax3.get_visible():
             lines.extend(self.current_lines)
 
@@ -285,19 +320,42 @@ class Imax_processing:
         self.update_legend()
         self.canvas.draw_idle()
 
-    def draw_point_marker(self, x: float) -> None:
-        """Vertical line at the point Proceed took the currents from.
+    def refresh_point_marker(self) -> None:
+        """Dashed black line at the point of the last table row.
 
-        Always visible, independently of the checkboxes; one line per
-        Proceed, so the lines match the rows of the table.
+        Only one line exists: it is replaced by every new search and moved
+        back to the previous row when a step is removed.
         """
-        line = self.ax.axvline(
-            x, color='black', linestyle='-', linewidth=1.2, zorder=5
-        )
-        self.point_markers.append(line)
+        if self.point_marker is not None:
+            try:
+                self.point_marker.remove()
+            except ValueError:
+                pass
+            self.point_marker = None
+        if self.steps:
+            x = self.time_num[self.steps[-1]['source_index']]
+            self.point_marker = self.ax.axvline(
+                x, color='black', linestyle='--', linewidth=1.2, zorder=5
+            )
+        self.canvas.draw_idle()
+
+    def update_target_line(self) -> None:
+        """Move the dashed 'target speed' line to the value of the entry."""
+        try:
+            value = float(self.speed_entry.get().strip().replace(',', '.'))
+        except ValueError:
+            return
+        self.target_line.set_ydata([value, value])
+        self.ax2.relim()
+        self.ax2.autoscale_view(scalex=False)
+        self.canvas.draw_idle()
 
     def create_table(self) -> None:
-        columns = ['speed'] + self.Current_columns
+        # Pmax columns exist only if MC was entered
+        self.Pmax_columns = (
+            [f'Pmax {c}' for c in self.Current_columns] if self.MC is not None else []
+        )
+        columns = ['speed'] + self.Current_columns + self.Pmax_columns
         self.columns = columns
         style = ttk.Style(self.root)
         style.configure('Imax.Treeview', font=FONTS['DATA_FONT'])
@@ -331,6 +389,8 @@ class Imax_processing:
         self.speed_entry = ttk.Entry(controls, width=ENTRY_WIDTH, font=FONTS['DATA_FONT'])
         self.speed_entry.grid(row=0, column=1, padx=5)
         self.speed_entry.insert(0, '10')
+        self.speed_entry.bind('<KeyRelease>', lambda e: self.update_target_line())
+        self.update_target_line()
 
         tk.Label(
             controls, text='Divide current by:', font=FONTS['TEXT_FONT'],
@@ -367,36 +427,36 @@ class Imax_processing:
         )
 
     def create_buttons(self) -> None:
+        def place(button, row: int, column: int) -> None:
+            button.grid(
+                row=row, column=column,
+                padx=GAPS['GAPS_X']['PAD_X_40_20'],
+                pady=GAPS['GAPS_Y']['PAD_Y_10'], sticky='w'
+            )
+
         self.Proceed_button = TestButtons(
             self.Imax_processing_frame, text='Proceed', command=self.proceed
         )
-        self.Proceed_button.grid(
-            row=3, column=0, padx=GAPS['GAPS_X']['PAD_X_40_20'],
-            pady=GAPS['GAPS_Y']['PAD_Y_10']
+        place(self.Proceed_button, 3, 0)
+        self.remove_button = TestButtons(
+            self.Imax_processing_frame, text='Remove previous step',
+            command=self.remove_previous_step
         )
+        place(self.remove_button, 3, 1)
         self.save_button = TestButtons(
             self.Imax_processing_frame, text='Save', command=self.choose_save_format
         )
-        self.save_button.grid(
-            row=3, column=1, padx=GAPS['GAPS_X']['PAD_X_40_20'],
-            pady=GAPS['GAPS_Y']['PAD_Y_10'], sticky='w'
-        )
-        self.BACK_button = MainButtons(
-            self.Imax_processing_frame, text='<< BACK',
-            command=lambda: self.back(self.Imax_processing_frame)
-        )
-        self.BACK_button.grid(
-            row=4, column=0, padx=GAPS['GAPS_X']['PAD_X_40_20'],
-            pady=GAPS['GAPS_Y']['PAD_Y_10']
-        )
+        place(self.save_button, 4, 0)
         self.INFO_button = MainButtons(
             self.Imax_processing_frame, text='User guide',
             command=lambda: show_info(self.root, 'Imax/info_processing.txt')
         )
-        self.INFO_button.grid(
-            row=4, column=1, padx=GAPS['GAPS_X']['PAD_X_40_20'],
-            pady=GAPS['GAPS_Y']['PAD_Y_10'], sticky='w'
+        place(self.INFO_button, 4, 1)
+        self.BACK_button = MainButtons(
+            self.Imax_processing_frame, text='<< BACK',
+            command=lambda: self.back(self.Imax_processing_frame)
         )
+        place(self.BACK_button, 5, 0)
 
     def _nearest_index(self, x: float) -> int:
         return int(np.argmin(np.abs(self.time_num - x)))
@@ -481,7 +541,9 @@ class Imax_processing:
 
         Measurements are recorded once per second, so a `window`-point span
         is `window` seconds. For an interior point i the rate is centered:
-            (T[i + 30] - T[i - 30]) / 60 s * 3600
+            (T[i + window/2] - T[i - window/2]) / window s * 3600
+        e.g. window = 60: (T[i + 30] - T[i - 30]) / 60 * 3600;
+             window = 30: (T[i + 15] - T[i - 15]) / 30 * 3600.
         Near the ends of the series the same-length span is shifted inside
         the data (one-sided difference). If the series is shorter than the
         window, the whole series is used.
@@ -502,6 +564,42 @@ class Imax_processing:
 
         return (temperature[hi] - temperature[lo]) / span * 3600.0
 
+    def _compute_step(
+        self, left: int, right: int, target: float, divide: float,
+        rate_values: np.ndarray, mc: Optional[float]
+    ) -> tuple[dict[str, float], int]:
+        """Find the row for the interval [left, right]; returns (row, index)."""
+        # Rates are computed over the whole series, so points near the
+        # edges of the selection still get a full centered window.
+        segment = rate_values[left:right + 1]
+        nearest_local = int(np.argmin(np.abs(segment - target)))
+        source_index = left + nearest_local
+
+        row = {'speed': float(segment[nearest_local])}
+        for column in self.Current_columns:
+            value = pd.to_numeric(
+                self.Current.iloc[source_index][column], errors='coerce'
+            )
+            if pd.isna(value):
+                raise ValueError(
+                    f'Current column "{column}" contains a non-numeric '
+                    f'value at the selected point.'
+                )
+            # The divisor applies to the found current, not to the speed.
+            row[column] = float(value) / divide
+            # Pmax = Imax * MC (only if MC is set)
+            if mc is not None:
+                row[f'Pmax {column}'] = row[column] * mc
+        return row, source_index
+
+    def _insert_row(self, row: dict[str, float]) -> None:
+        self.tree.insert(
+            '', 'end',
+            values=[f"{row['speed']:.4f}"] +
+                   [f"{row[c]:.6g}" for c in self.Current_columns] +
+                   [f"{row[c]:.6g}" for c in self.Pmax_columns]
+        )
+
     def proceed(self) -> None:
         if self.selection_left is None or self.selection_right is None:
             Messages.show('warning', 'LINE_NOT_DEFINED')
@@ -516,34 +614,16 @@ class Imax_processing:
                     'Select an interval containing at least two data points.'
                 )
 
-            # Rates are computed over the whole series, so points near the
-            # edges of the selection still get a full centered window.
-            segment = self.rate_values[left:right + 1]
-
-            nearest_local = int(np.argmin(np.abs(segment - target_speed_h)))
-            source_index = left + nearest_local
-
-            row = {'speed': float(segment[nearest_local])}
-            for column in self.Current_columns:
-                value = pd.to_numeric(
-                    self.Current.iloc[source_index][column], errors='coerce'
-                )
-                if pd.isna(value):
-                    raise ValueError(
-                        f'Current column "{column}" contains a non-numeric '
-                        f'value at the selected point.'
-                    )
-                # The divisor applies to the found current, not to the speed.
-                row[column] = float(value) / divide
-
-            self.results.append(row)
-            self.draw_point_marker(self.time_num[source_index])
-            self.canvas.draw_idle()
-            self.tree.insert(
-                '', 'end',
-                values=[f"{row['speed']:.4f}"] +
-                       [f"{row[c]:.6g}" for c in self.Current_columns]
+            row, source_index = self._compute_step(
+                left, right, target_speed_h, divide, self.rate_values, self.MC
             )
+            self.steps.append({
+                'left': left, 'right': right, 'target': target_speed_h,
+                'divide': divide, 'source_index': source_index, 'row': row,
+            })
+            self._insert_row(row)
+            self.refresh_point_marker()
+            self.update_target_line()
 
             self.selection_label.config(
                 text=(
@@ -554,6 +634,143 @@ class Imax_processing:
             )
         except Exception as exc:
             Messages.show('error', 'VALUE_ERROR', value_name='Imax', error=exc)
+
+    def remove_previous_step(self) -> None:
+        """Delete the last row of the table (and its line on the plot)."""
+        if not self.steps:
+            Messages.show('warning', 'NO_DRDH_RESULTS')
+            return
+        self.steps.pop()
+        children = self.tree.get_children()
+        if children:
+            self.tree.delete(children[-1])
+        self.refresh_point_marker()
+
+    # ------------------------------------------------------------------
+    # Computed parameters (MC, base)
+    # ------------------------------------------------------------------
+    def show_computed_parameters(self) -> None:
+        win = tk.Toplevel(self.root)
+        win.title('Computed parameters')
+        win.geometry('340x180')
+        win.config(bg=COLORS['BACKGROUND_COLOR'])
+        frame = tk.Frame(win)
+        frame.pack(
+            fill=tk.BOTH, expand=True,
+            padx=GAPS['GAPS_X']['PAD_X_10'], pady=GAPS['GAPS_Y']['PAD_Y_10']
+        )
+        listbox = tk.Listbox(
+            frame, font=FONTS['DATA_FONT'],
+            bg=COLORS['PARAMETERS_BACKGROUND_COLOR']
+        )
+        listbox.pack(fill=tk.BOTH, expand=True)
+        mc_text = 'not set' if self.MC is None else f'{self.MC}'
+        listbox.insert(tk.END, f'MC, MWt/(°C/h): {mc_text}')
+        listbox.insert(tk.END, f'base, s: {self.base}')
+        SmallButtons(win, text='Close', command=win.destroy).pack(pady=5)
+
+    def edit_computed_parameters(self) -> None:
+        win = tk.Toplevel(self.root)
+        win.title('Edit computed parameters')
+        win.geometry('380x170')
+        win.config(bg=COLORS['BACKGROUND_COLOR'])
+        win.grab_set()
+
+        tk.Label(
+            win, text='MC, MWt/(°C/h):', font=FONTS['INFO_FONT'],
+            bg=COLORS['BACKGROUND_COLOR']
+        ).grid(row=0, column=0, padx=10, pady=(15, 5), sticky='w')
+        mc_entry = ttk.Entry(win, width=ENTRY_WIDTH, font=FONTS['DATA_FONT'])
+        mc_entry.grid(row=0, column=1, padx=10, pady=(15, 5))
+        if self.MC is not None:
+            mc_entry.insert(0, str(self.MC))
+
+        tk.Label(
+            win, text='base, s:', font=FONTS['INFO_FONT'],
+            bg=COLORS['BACKGROUND_COLOR']
+        ).grid(row=1, column=0, padx=10, pady=5, sticky='w')
+        base_entry = ttk.Entry(win, width=ENTRY_WIDTH, font=FONTS['DATA_FONT'])
+        base_entry.grid(row=1, column=1, padx=10, pady=5)
+        base_entry.insert(0, str(self.base))
+        mc_entry.focus_set()
+
+        def apply() -> None:
+            # MC: empty means "no MC" (no Pmax columns)
+            mc_text = mc_entry.get().strip().replace(',', '.')
+            mc: Optional[float] = None
+            if mc_text:
+                try:
+                    mc = float(mc_text)
+                except ValueError as exc:
+                    Messages.show('error', 'VALUE_ERROR', value_name='MC', error=exc)
+                    return
+                if mc <= 0:
+                    Messages.show(
+                        'error', 'VALUE_POSTIVE', value='MC', sign='positive'
+                    )
+                    return
+
+            try:
+                base = float(base_entry.get().strip().replace(',', '.'))
+            except ValueError as exc:
+                Messages.show('error', 'VALUE_ERROR', value_name='base', error=exc)
+                return
+            low, high = IMAX_BASE_RANGE
+            if not (low <= base <= high):
+                Messages.show(
+                    'warning', 'BASE_OUT_OF_RANGE',
+                    value='base', low=low, high=high
+                )
+                return
+
+            try:
+                self.apply_computed_parameters(mc, int(round(base)))
+            except Exception as exc:
+                Messages.show('error', 'VALUE_ERROR', value_name='Imax', error=exc)
+                return
+            win.destroy()
+
+        SmallButtons(win, text='Apply', command=apply).grid(
+            row=2, column=0, padx=10, pady=20
+        )
+        SmallButtons(win, text='Cancel', command=win.destroy).grid(
+            row=2, column=1, padx=10, pady=20
+        )
+
+    def apply_computed_parameters(self, mc: Optional[float], base: int) -> None:
+        """Set new MC / base and recalculate everything that depends on them.
+
+        The rows already in the table are found again with the same
+        interval, requested speed and divisor, so the table never mixes
+        results obtained with different base / MC.
+        """
+        rate_values = self._heating_rate_per_hour(self.temperature_values, base)
+        recalculated = [
+            self._compute_step(
+                s['left'], s['right'], s['target'], s['divide'], rate_values, mc
+            )
+            for s in self.steps
+        ]
+
+        # Everything was calculated successfully: commit.
+        self.MC = mc
+        self.base = base
+        self.rate_values = rate_values
+        self.rate_line.set_ydata(rate_values)
+        for step, (row, source_index) in zip(self.steps, recalculated):
+            step['row'] = row
+            step['source_index'] = source_index
+
+        # Pmax columns appear / disappear together with MC
+        self.tree.destroy()
+        self.create_table()
+        for step in self.steps:
+            self._insert_row(step['row'])
+
+        self.ax2.relim()
+        self.ax2.autoscale_view(scalex=False)
+        self.refresh_point_marker()
+        self.update_target_line()
 
     def on_scroll(self, event) -> None:
         """Zoom the X axis around the mouse cursor; Y axis remains unchanged."""
@@ -590,7 +807,10 @@ class Imax_processing:
         return [list(self.tree.item(item, 'values')) for item in self.tree.get_children()]
 
     def get_column_headings(self) -> list[str]:
-        return ['Temperature rise speed, °C/h'] + self.Current_columns
+        return (
+            ['Temperature rise speed, °C/h'] + self.Current_columns
+            + self.Pmax_columns
+        )
 
     def choose_save_format(self) -> None:
         win = tk.Toplevel(self.root)
