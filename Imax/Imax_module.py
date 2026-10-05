@@ -10,11 +10,10 @@ from Settings import (
     show_info, FONTS, COLORS, GAPS, ENTRY_WIDTH,
     HEADER_FRAME_HEIGHT, MOUSE_WHEEL_DELTA, NFME_BUTTONS,
     MINSIZE_RIGHT_FRAME, MINSIZE_RIGHT_HEADER, LEFT_CANVAS_WIDTH,
+    IMAX_BASE_DEFAULT, IMAX_BASE_RANGE
 )
 
-# Window for the temperature rise speed, s (the 'base' entry)
-IMAX_BASE_DEFAULT = 60
-IMAX_BASE_RANGE = (2, 3600)
+
 
 
 class Imax_module:
@@ -260,7 +259,7 @@ class Imax_module:
             '⏱ Temperature :1+', 2, 0
         )
         self.current_required_label = self._required_label(
-            '⏱ Current :1+', 3, 0
+            '⏱ Current :2', 3, 0
         )
         # Optional values: no clock, they have defaults / may stay empty
         self.base_required_label = self._required_label('  Base', 1, 1)
@@ -507,7 +506,7 @@ class Imax_module:
                 self.Current_columns = columns
                 self.Current = data.copy()
                 self.parameter_columns['Current'] = columns
-                self.current_required_label.config(text='✓ Current :1+')
+                self.current_required_label.config(text='✓ Current :2')
 
             self.set_column_buttons_state(columns, disabled=True)
             if parameter not in ('Time', 'Temperature', 'Current'):
@@ -535,7 +534,7 @@ class Imax_module:
         self.parameter_columns.clear()
         self.time_required_label.config(text='⏱ Time :1')
         self.temperature_required_label.config(text='⏱ Temperature :1+')
-        self.current_required_label.config(text='⏱ Current :1+')
+        self.current_required_label.config(text='⏱ Current :2')
         self.clear_all_selection()
 
     def show_selected_parameters(self, attr_name: str) -> None:

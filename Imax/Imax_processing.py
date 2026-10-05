@@ -17,13 +17,11 @@ from Buttons import MainButtons, TestButtons, SmallButtons
 from Messages import Messages
 from Settings import (
     show_info, FONTS, COLORS, GAPS, SPLITTER_MINSIZES,
-    PLOT, TABLE, ENTRY_WIDTH
+    PLOT, TABLE, ENTRY_WIDTH, IMAX_BASE_RANGE
 )
 
 mpl.rcParams['font.family'] = 'Times New Roman'
 
-# Allowed window of the heating rate, s (the same as in Imax_module)
-IMAX_BASE_RANGE = (2, 3600)
 
 
 class Imax_processing:
@@ -366,10 +364,14 @@ class Imax_processing:
             style='Imax.Treeview', height=TABLE['CELL_HEIGHT']
         )
         for column in columns:
-            heading = 'Temperature rise speed, °C/h' if column == 'speed' else column
+            if column == 'speed':
+                heading = 'Temperature rise speed, °C/h'
+            elif column in self.Current_columns:
+                heading = f'Imax {column}'
+            else:
+                heading = column
             self.tree.heading(column, text=heading)
             self.tree.column(column, width=TABLE['CELL_WIDTH'], anchor='center')
-        self.tree.pack(fill=tk.BOTH, expand=True)
 
     def create_controls(self) -> None:
         controls = tk.Frame(
@@ -401,7 +403,7 @@ class Imax_processing:
         self.divide_entry.insert(0, '60')
 
         self.selection_label = tk.Label(
-            controls, text='Select heating interval: left click — start, right click — end',
+            controls, text='Select heating interval: left click — first point, right click — last point',
             font=FONTS['INFO_FONT'], bg=COLORS['BACKGROUND_COLOR']
         )
         self.selection_label.grid(row=0, column=4, columnspan=3, padx=10, sticky='w')
@@ -487,7 +489,7 @@ class Imax_processing:
                 )
             )
         else:
-            side = 'start' if event.button == 1 else 'end'
+            side = 'first point' if event.button == 1 else 'last point'
             self.selection_label.config(text=f'{side.capitalize()} point selected.')
         self.redraw_selection()
 
@@ -585,7 +587,7 @@ class Imax_processing:
                     f'Current column "{column}" contains a non-numeric '
                     f'value at the selected point.'
                 )
-            # The divisor applies to the found current, not to the speed.
+            # The divisor applies to the found current.
             row[column] = float(value) / divide
             # Pmax = Imax * MC (only if MC is set)
             if mc is not None:
@@ -808,8 +810,9 @@ class Imax_processing:
 
     def get_column_headings(self) -> list[str]:
         return (
-            ['Temperature rise speed, °C/h'] + self.Current_columns
-            + self.Pmax_columns
+                ['Temperature rise speed, °C/h']
+                + [f'Imax {c}' for c in self.Current_columns]
+                + self.Pmax_columns
         )
 
     def choose_save_format(self) -> None:
@@ -830,6 +833,11 @@ class Imax_processing:
         )
 
     def save_to_excel(self) -> None:
+        """
+        Export the results table to an Excel file.
+
+        Creates a formatted workbook with auto-sized columns.
+        """
         if not self.results:
             Messages.show('warning', 'NO_DRDH_RESULTS')
             return
@@ -856,6 +864,9 @@ class Imax_processing:
         wb.save(filename)
 
     def save_to_txt(self) -> None:
+        """
+        Export the results table as a tab-separated text file.
+        """
         if not self.results:
             Messages.show('warning', 'NO_DRDH_RESULTS')
             return

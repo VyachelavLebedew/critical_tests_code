@@ -111,6 +111,9 @@ ENCODINGS: list[str] = ["utf-8-sig", "cp1251", "cp1252", "utf-8", "latin-1"]
 # PCR constants
 PCR_BASE_RANGE: Tuple[int, int] = (10, 300)  # base window range, seconds
 PCR_BASE_DEFAULT: int = 60  # default base, seconds
+# Imax constants
+IMAX_BASE_DEFAULT = 60
+IMAX_BASE_RANGE = (2, 3600)
 
 # PCR uncertainty constants (methodology). Used by PCR_processing.
 PCR_SIGMA: Dict[str, float] = {
