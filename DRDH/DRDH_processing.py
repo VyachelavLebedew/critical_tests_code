@@ -15,6 +15,7 @@ from matplotlib.backends.backend_tkagg import (
 )
 from matplotlib.figure import Figure
 import matplotlib.dates as mdates
+from matplotlib.patches import Rectangle
 
 from typing import Any, Optional, List, Dict
 
@@ -29,6 +30,31 @@ from Settings import (
 )
 
 mpl.rcParams['font.family'] = 'Times New Roman'
+
+# Ways of defining a DRDH line:
+#   Manual - two points: left click + right click (the old method);
+#   Range  - one range dragged with the left mouse button; the line is the
+#            least-squares fit through ALL the points of the range.
+SELECT_MODE_MANUAL = "Manual"
+SELECT_MODE_RANGE = "Range"
+
+# A range must contain at least that many samples to be fitted
+RANGE_MIN_POINTS = 3
+
+# A press-and-release closer than that (pixels) is a click, not a range
+RANGE_MIN_DRAG_PX = 4
+
+# Stages in which Enter performs the next action (Fix 1 / Fix 2 / Proceed)
+ENTER_STAGES = ("FIX_1", "FIX_1_INHERITED", "FIX_2", "PROCEED")
+ENTER_HINT = "\n(or press Enter)"
+
+# User hints of the Range mode (the Manual ones are DRDH_HINTS in Settings)
+RANGE_HINTS = {
+    'LEFT_1': "Line 1: drag with the left mouse button\nto select a range",
+    'RIGHT_1': "Line 1: drag with the left mouse button\nto select a range",
+    'LEFT_2': "Line 2: drag with the left mouse button\nto select a range",
+    'RIGHT_2': "Line 2: drag with the left mouse button\nto select a range",
+}
 
 
 class DRDH_processing:
@@ -108,21 +134,18 @@ class DRDH_processing:
         self.step_points: int = ITC_COMPUTATION_VALUES['STEP_POINTS']
 
         self.selection_state = {
-            "interval1": {
-                "left": None,
-                "right": None,
-                "fixed": False,
-                "dots": False
-            },
-            "interval2": {
-                "left": None,
-                "right": None,
-                "fixed": False,
-                "dots": False
-            }
+            "interval1": self.empty_state(),
+            "interval2": self.empty_state()
         }
 
         self.active_interval = 1
+
+        # How the lines are defined: "Manual" (two points) or "Range"
+        # (a dragged range). Changed in the "Select mode" menu.
+        self.select_mode: str = SELECT_MODE_MANUAL
+
+        # A range which is being dragged right now (None between drags)
+        self.range_drag: Optional[Dict[str, Any]] = None
 
         # Stage flags of the current measurement cycle:
         #   fix1_done    - "Fix 1" has been pressed for this cycle
@@ -149,6 +172,49 @@ class DRDH_processing:
         # Visibility flags, so that a new window repeats the old one exactly
         self.show_move_line: bool = False
         self.show_intersections: bool = False
+
+    @staticmethod
+    def empty_state() -> Dict[str, Any]:
+        """
+        A line that has not been selected yet.
+
+            left / right - click data of the two points (Manual) or of the
+                           first and the last sample of the range (Range)
+            fit          - slope and intercept of the least-squares line
+                           through the range; None for a Manual line, which
+                           goes through its two points exactly
+        """
+        return {
+            "left": None,
+            "right": None,
+            "fixed": False,
+            "dots": False,
+            "fit": None
+        }
+
+    @staticmethod
+    def empty_artists() -> Dict[str, Any]:
+        """Plot artists of one interval, in one plot window."""
+        return {"left": None, "right": None, "line": None, "span": None}
+
+    @staticmethod
+    def remove_marks(art: Dict[str, Any]) -> None:
+        """Remove the yellow dots / the range highlight, keep the line."""
+        for key in ("left", "right", "span"):
+            artist = art.get(key)
+
+            if artist is not None:
+                artist.remove()
+                art[key] = None
+
+    @classmethod
+    def clear_artists(cls, art: Dict[str, Any]) -> None:
+        """Remove everything an interval has drawn in one plot window."""
+        cls.remove_marks(art)
+
+        if art.get("line") is not None:
+            art["line"].remove()
+            art["line"] = None
 
     @staticmethod
     def group_number(name: str) -> int:
@@ -333,6 +399,7 @@ class DRDH_processing:
         self.DRDH_processing_frame.grid_columnconfigure(3, weight=2)
 
         self.create_menu()
+        self.bind_enter_key(self.root.winfo_toplevel())
         self.create_splitter_window()
         self.create_plot_frame()
         self.labels()
@@ -682,6 +749,23 @@ class DRDH_processing:
             font=FONTS['DATA_FONT'],
             command=self.extended_cursor
         )
+        select_mode_menu = tk.Menu(self.menu_bar, tearoff=1)
+        self.menu_bar.add_cascade(
+            label="Select mode", menu=select_mode_menu
+        )
+
+        self.select_mode_var = tk.StringVar(
+            master=root_window, value=self.select_mode
+        )
+        for mode in (SELECT_MODE_MANUAL, SELECT_MODE_RANGE):
+            select_mode_menu.add_radiobutton(
+                label=mode,
+                value=mode,
+                variable=self.select_mode_var,
+                font=FONTS['DATA_FONT'],
+                command=self.change_select_mode
+            )
+
         experiment_parameters = tk.Menu(
             self.menu_bar,
             tearoff=1
@@ -1935,18 +2019,10 @@ class DRDH_processing:
             self.update_hint()
             return
 
-        # Remove yellow dots
+        # Remove yellow dots (and the highlight of the dragged ranges)
         for plot in self.plot_windows:
             for key in ("interval1", "interval2"):
-                art = plot["interval_artists"][key]
-
-                if art["left"]:
-                    art["left"].remove()
-                    art["left"] = None
-
-                if art["right"]:
-                    art["right"].remove()
-                    art["right"] = None
+                self.remove_marks(plot["interval_artists"][key])
 
         for key in ("interval1", "interval2"):
             self.selection_state[key]["dots"] = False
@@ -2125,7 +2201,8 @@ class DRDH_processing:
         if state1["left"] and state1["right"]:
             self.finished_lines.append({
                 "left": state1["left"],
-                "right": state1["right"]
+                "right": state1["right"],
+                "fit": state1.get("fit")
             })
 
         # Artists: interval1 -> black (measured, kept forever),
@@ -2138,30 +2215,18 @@ class DRDH_processing:
                 self.apply_finished_style(art1["line"])
                 plot["finished_lines"].append(art1["line"])
 
-            plot["interval_artists"]["interval1"] = {
-                "left": art2["left"],
-                "right": art2["right"],
-                "line": art2["line"]
-            }
-            plot["interval_artists"]["interval2"] = {
-                "left": None,
-                "right": None,
-                "line": None
-            }
+            plot["interval_artists"]["interval1"] = dict(art2)
+            plot["interval_artists"]["interval2"] = self.empty_artists()
 
         # State: interval2 -> interval1 (new cycle)
         self.selection_state["interval1"] = {
             "left": state2["left"],
             "right": state2["right"],
             "fixed": True,
-            "dots": state2["dots"]
+            "dots": state2["dots"],
+            "fit": state2.get("fit")
         }
-        self.selection_state["interval2"] = {
-            "left": None,
-            "right": None,
-            "fixed": False,
-            "dots": False
-        }
+        self.selection_state["interval2"] = self.empty_state()
 
         # A new cycle starts: line 1 is inherited and locked,
         # the user has to confirm it with "Fix 1" before clicking again.
@@ -2203,29 +2268,14 @@ class DRDH_processing:
                     p.remove()
                 plot["green_points"] = []
 
-            art2 = plot["interval_artists"]["interval2"]
-
-            for key in ("left", "right", "line"):
-                if art2[key]:
-                    art2[key].remove()
-
-            plot["interval_artists"]["interval2"] = {
-                "left": None,
-                "right": None,
-                "line": None
-            }
+            self.clear_artists(plot["interval_artists"]["interval2"])
 
         self.show_move_line = False
         self.show_intersections = False
 
         # interval1 is kept as it is (still yellow, still fixed),
         # only the second interval is dropped and has to be re-selected.
-        self.selection_state["interval2"] = {
-            "left": None,
-            "right": None,
-            "fixed": False,
-            "dots": False
-        }
+        self.selection_state["interval2"] = self.empty_state()
 
         # The rejected measurement must disappear from the DRDH plot too
         if self.drdh_points:
@@ -2304,14 +2354,10 @@ class DRDH_processing:
                 "right": last_step_line["right"],
                 "fixed": True,
                 "dots": True,
+                "fit": last_step_line.get("fit"),
             }
 
-            self.selection_state["interval2"] = {
-                "left": None,
-                "right": None,
-                "fixed": False,
-                "dots": False,
-            }
+            self.selection_state["interval2"] = self.empty_state()
 
             self.fix1_done = False
             self.line1_locked = True
@@ -2336,6 +2382,7 @@ class DRDH_processing:
                 "right": last_step_line["right"],
                 "fixed": True,
                 "dots": True,
+                "fit": last_step_line.get("fit"),
             }
 
             self.selection_state["interval2"] = {
@@ -2343,6 +2390,7 @@ class DRDH_processing:
                 "right": last_step_second_line["right"],
                 "fixed": True,
                 "dots": True,
+                "fit": last_step_second_line.get("fit"),
             }
 
             self.fix1_done = True
@@ -2360,19 +2408,7 @@ class DRDH_processing:
 
             # Remove all currently drawn active elements.
             for key in ("interval1", "interval2"):
-                art = plot["interval_artists"][key]
-
-                for artist_key in ("left", "right", "line"):
-                    artist = art[artist_key]
-
-                    if artist is not None:
-                        artist.remove()
-
-                plot["interval_artists"][key] = {
-                    "left": None,
-                    "right": None,
-                    "line": None,
-                }
+                self.clear_artists(plot["interval_artists"][key])
 
             # Remove the last finished line from this plot.
             if plot["finished_lines"]:
@@ -2394,16 +2430,7 @@ class DRDH_processing:
                 state = self.selection_state[key]
                 art = plot["interval_artists"][key]
 
-                if state["dots"]:
-                    if state["left"]:
-                        art["left"] = self.draw_selection_point(
-                            plot, state["left"]
-                        )
-
-                    if state["right"]:
-                        art["right"] = self.draw_selection_point(
-                            plot, state["right"]
-                        )
+                self.draw_state_marks(plot, state, art)
 
                 if state["left"] and state["right"]:
                     art["line"] = self.draw_interval_line(
@@ -2646,6 +2673,8 @@ class DRDH_processing:
         self.times = [
             datetime(1899, 12, 30) + timedelta(days=t) for t in self.Time
         ]
+        # The same moments as matplotlib dates (days), for the range search
+        self.times_num = np.asarray(mdates.date2num(self.times), dtype=float)
 
         ax1.plot(
             self.times, self.Reactivity,
@@ -2744,8 +2773,8 @@ class DRDH_processing:
                 bbox=dict(boxstyle="round", facecolor="white", alpha=0.8)
             ),
             "interval_artists": {
-                "interval1": {"left": None, "right": None, "line": None},
-                "interval2": {"left": None, "right": None, "line": None},
+                "interval1": self.empty_artists(),
+                "interval2": self.empty_artists(),
             },
             "finished_lines": [],
             "green_points": [],
@@ -2760,6 +2789,15 @@ class DRDH_processing:
         canvas.mpl_connect(
             "scroll_event",
             lambda event, p=plot_obj: self.on_plot_scroll(event, p)
+        )
+        # Dragging of a range (Range select mode)
+        canvas.mpl_connect(
+            "motion_notify_event",
+            lambda event, p=plot_obj: self.on_plot_motion(event, p)
+        )
+        canvas.mpl_connect(
+            "button_release_event",
+            lambda event, p=plot_obj: self.on_plot_release(event, p)
         )
         canvas.get_tk_widget().bind("<Left>", self.move_line_left)
         canvas.get_tk_widget().bind("<Right>", self.move_line_right)
@@ -2798,15 +2836,7 @@ class DRDH_processing:
             state = self.selection_state[key]
             art = plot["interval_artists"][key]
 
-            if state["dots"]:
-                if state["left"]:
-                    art["left"] = self.draw_selection_point(
-                        plot, state["left"]
-                    )
-                if state["right"]:
-                    art["right"] = self.draw_selection_point(
-                        plot, state["right"]
-                    )
+            self.draw_state_marks(plot, state, art)
 
             if state["left"] and state["right"]:
                 art["line"] = self.draw_interval_line(plot, state)
@@ -2836,6 +2866,7 @@ class DRDH_processing:
         Drop every reference to the large plot window when the user
         closes it, otherwise stale Tk widgets raise TclError later.
         """
+        self.cancel_range_drag()
         plot_obj = getattr(self, "large_plot_obj", None)
 
         if plot_obj in self.plot_windows:
@@ -2869,6 +2900,7 @@ class DRDH_processing:
         # To move large plon to the front position
         self.large_plot_window = win
         win.protocol("WM_DELETE_WINDOW", self.close_large_plot_window)
+        self.bind_enter_key(win)
 
         frame = tk.Frame(win, bg="white")
         frame.pack(fill=tk.BOTH, expand=True)
@@ -2960,7 +2992,16 @@ class DRDH_processing:
         if stage == "FIX_1" and self.line1_locked:
             stage = "FIX_1_INHERITED"
 
-        self.set_status_text(DRDH_HINTS[stage])
+        if self.select_mode == SELECT_MODE_RANGE and stage in RANGE_HINTS:
+            text = RANGE_HINTS[stage]
+        else:
+            text = DRDH_HINTS[stage]
+
+        # Enter does the next action: Fix 1, Fix 2 or Proceed
+        if stage in ENTER_STAGES:
+            text += ENTER_HINT
+
+        self.set_status_text(text)
 
     def set_status_text(self, text):
         """
@@ -3000,18 +3041,18 @@ class DRDH_processing:
             key=lambda i: abs(self.times[i] - clicked_time)
         )
 
-        time_val = self.times[nearest_index]
-        R = float(self.Reactivity[nearest_index])
+        return self.get_index_data(nearest_index)
 
-        group_values = []
-        for group in self.Groups:
-            group_values.append(float(group[nearest_index]))
-
+    def get_index_data(self, index):
+        """
+        Everything the processing needs to know about one sample: the same
+        record a click produces, built from the sample index.
+        """
         return {
-            "index": nearest_index,
-            "time": time_val,
-            "R": R,
-            "groups": group_values
+            "index": index,
+            "time": self.times[index],
+            "R": float(self.Reactivity[index]),
+            "groups": [float(group[index]) for group in self.Groups]
         }
 
     def on_plot_scroll(self, event, plot):
@@ -3099,6 +3140,12 @@ class DRDH_processing:
         if state["fixed"]:
             return
 
+        # Range mode: the line is defined by dragging, not by two clicks
+        if self.select_mode == SELECT_MODE_RANGE:
+            if event.button == 1:
+                self.begin_range_drag(event, plot, interval_key)
+            return
+
         click_data = self.get_click_data(event, plot)
         if click_data is None:
             return
@@ -3179,6 +3226,356 @@ class DRDH_processing:
         for p in self.plot_windows:
             p["canvas"].draw_idle()
 
+    # ------------------------------------------------------------------
+    # Select mode: Manual (two points) / Range (a dragged range)
+    # ------------------------------------------------------------------
+    def get_line_params(self, state):
+        """
+        Slope and intercept of a line, in matplotlib date units (days).
+
+        A Range line is the least-squares fit through all the points of its
+        range. A Manual line goes through its two points exactly.
+        """
+        fit = state.get("fit")
+
+        if fit is not None:
+            return fit["slope"], fit["intercept"]
+
+        x1 = mdates.date2num(state["left"]["time"])
+        x2 = mdates.date2num(state["right"]["time"])
+        y1 = state["left"]["R"]
+        y2 = state["right"]["R"]
+
+        slope = (y2 - y1) / (x2 - x1)
+        intercept = y1 - slope * x1
+
+        return slope, intercept
+
+    def fit_range_line(self, first, last):
+        """
+        Least-squares line through the reactivity of EVERY sample from
+        `first` to `last` (both included).
+
+        The time is centered before fitting: it is ~4.6e4 days, while the
+        range lasts only minutes, so the raw values are poorly conditioned.
+        """
+        x = self.times_num[first:last + 1]
+        y = np.asarray(self.Reactivity, dtype=float)[first:last + 1]
+
+        x_mean = float(np.mean(x))
+        slope, y_mean = np.polyfit(x - x_mean, y, 1)
+
+        return {
+            "slope": float(slope),
+            "intercept": float(y_mean - slope * x_mean),
+            "points": int(len(x))
+        }
+
+    def get_moved_groups_in_range(self, first, last):
+        """
+        Groups whose position is not constant within the range.
+
+        A line may only be built on a stretch where every group stands
+        still - the same rule the two clicks of the Manual mode obey.
+        Returns [(name, position at the start, position of largest shift)].
+        """
+        moved = []
+
+        for i, group in enumerate(self.Groups):
+            segment = np.asarray(group[first:last + 1], dtype=float)
+
+            if not np.allclose(segment, segment[0]):
+                farthest = int(np.argmax(np.abs(segment - segment[0])))
+                moved.append((
+                    self.Group_names[i],
+                    float(segment[0]),
+                    float(segment[farthest])
+                ))
+
+        return moved
+
+    def change_select_mode(self):
+        """
+        "Select mode" menu handler.
+
+        The line which is being selected right now is dropped: a line is
+        either two points or a range, never a mix of both.
+        """
+        new_mode = self.select_mode_var.get()
+
+        if new_mode == self.select_mode:
+            return
+
+        self.cancel_range_drag()
+        self.select_mode = new_mode
+        self.reset_active_selection()
+        self.update_hint()
+
+    def reset_active_selection(self):
+        """
+        Drop the line that is being selected (not fixed yet). Fixed lines,
+        and the line inherited from the previous step, stay untouched.
+        """
+        if self.selection_state["interval2"]["fixed"]:
+            return
+
+        if self.line1_locked and not self.fix1_done:
+            return
+
+        key = "interval2" if self.fix1_done else "interval1"
+
+        if self.selection_state[key]["fixed"]:
+            return
+
+        for plot in self.plot_windows:
+            self.clear_artists(plot["interval_artists"][key])
+            plot["canvas"].draw_idle()
+
+        self.selection_state[key] = self.empty_state()
+        self.refresh_line_tables()
+
+    def make_span_patch(self, plot, x_start, x_end):
+        """
+        Translucent band over a range of the time axis. Its height is the
+        whole axes, so it does not depend on the vertical zoom.
+        """
+        ax = plot["ax1"]
+
+        patch = Rectangle(
+            (min(x_start, x_end), 0),
+            abs(x_end - x_start),
+            1,
+            transform=ax.get_xaxis_transform(),
+            facecolor=PLOT_STYLE.get('RANGE_COLOR', "#F2B134"),
+            edgecolor=PLOT_STYLE.get('RANGE_EDGE', "#6B4E12"),
+            alpha=PLOT_STYLE.get('RANGE_ALPHA', 0.25),
+            linewidth=0.8,
+            zorder=1
+        )
+        ax.add_patch(patch)
+
+        return patch
+
+    def draw_range_span(self, plot, state):
+        """The band over the range a Range line was fitted on."""
+        return self.make_span_patch(
+            plot,
+            mdates.date2num(state["left"]["time"]),
+            mdates.date2num(state["right"]["time"])
+        )
+
+    def draw_state_marks(self, plot, state, art):
+        """
+        Draw what marks a selected line in one plot window: the yellow dots
+        of a Manual line, or the highlighted range of a Range line.
+        """
+        if not state["dots"]:
+            return
+
+        if state.get("fit") is not None:
+            art["span"] = self.draw_range_span(plot, state)
+            return
+
+        if state["left"]:
+            art["left"] = self.draw_selection_point(plot, state["left"])
+
+        if state["right"]:
+            art["right"] = self.draw_selection_point(plot, state["right"])
+
+    def begin_range_drag(self, event, plot, interval_key):
+        """Left button pressed in Range mode: the range starts here."""
+        if event.xdata is None:
+            return
+
+        self.cancel_range_drag()
+
+        # The band is drawn in EVERY window, like the dots of Manual mode
+        patches = [
+            (p, self.make_span_patch(p, event.xdata, event.xdata))
+            for p in self.plot_windows
+        ]
+
+        self.range_drag = {
+            "key": interval_key,
+            "plot": plot,
+            "x_start": event.xdata,
+            "x_end": event.xdata,
+            "pixel_start": event.x,
+            "patches": patches
+        }
+
+        for p, _ in patches:
+            p["canvas"].draw_idle()
+
+    def on_plot_motion(self, event, plot):
+        """The mouse moves while a range is being dragged."""
+        drag = self.range_drag
+
+        if drag is None or drag["plot"] is not plot:
+            return
+
+        if event.xdata is None:
+            return
+
+        drag["x_end"] = event.xdata
+
+        x_min = min(drag["x_start"], drag["x_end"])
+        width = abs(drag["x_end"] - drag["x_start"])
+
+        for p, patch in drag["patches"]:
+            patch.set_x(x_min)
+            patch.set_width(width)
+            p["canvas"].draw_idle()
+
+    def on_plot_release(self, event, plot):
+        """The left button is released: the range is complete."""
+        drag = self.range_drag
+
+        if drag is None or drag["plot"] is not plot:
+            return
+
+        if event.button != 1:
+            return
+
+        # Outside the axes there is no xdata - take the last known end
+        x_end = event.xdata if event.xdata is not None else drag["x_end"]
+        dragged_px = abs(event.x - drag["pixel_start"])
+
+        self.cancel_range_drag()
+
+        # A plain click is not a range
+        if dragged_px < RANGE_MIN_DRAG_PX:
+            return
+
+        self.apply_range_selection(drag["key"], drag["x_start"], x_end)
+
+    def cancel_range_drag(self):
+        """Drop the band of an unfinished drag."""
+        drag = self.range_drag
+        self.range_drag = None
+
+        if drag is None:
+            return
+
+        for p, patch in drag["patches"]:
+            try:
+                patch.remove()
+                p["canvas"].draw_idle()
+            except Exception:
+                # the window may have been closed in the meantime
+                pass
+
+    def apply_range_selection(self, interval_key, x_a, x_b):
+        """
+        Turn a dragged range into a line.
+
+        Every sample between the two ends of the drag takes part in the
+        fit; the first and the last of them play the role of the left and
+        the right point of the Manual mode.
+        """
+        state = self.selection_state[interval_key]
+
+        if state["fixed"]:
+            return
+
+        x_low, x_high = sorted((x_a, x_b))
+        last_index = len(self.times_num) - 1
+
+        first = int(np.searchsorted(self.times_num, x_low, side="left"))
+        last = int(np.searchsorted(self.times_num, x_high, side="right")) - 1
+
+        first = max(first, 0)
+        last = min(last, last_index)
+
+        points = last - first + 1
+
+        if points < RANGE_MIN_POINTS:
+            Messages.show(
+                "error",
+                "VALUE_ERROR",
+                value_name="Range",
+                error=(
+                    f"the range holds {max(points, 0)} point(s), "
+                    f"at least {RANGE_MIN_POINTS} are needed"
+                )
+            )
+            return
+
+        moved_groups = self.get_moved_groups_in_range(first, last)
+
+        if moved_groups:
+            movement_text = "\n".join(
+                f"{name}: {start:.2f} \u2192 {end:.2f}"
+                for name, start, end in moved_groups
+            )
+
+            Messages.show(
+                "error",
+                "GROUPS_MOVED",
+                movements=movement_text
+            )
+            return
+
+        state["left"] = self.get_index_data(first)
+        state["right"] = self.get_index_data(last)
+        state["fit"] = self.fit_range_line(first, last)
+        state["dots"] = True
+
+        # Needed by the "C from file" method of the DRDC
+        if self.first_click_index is None:
+            self.first_click_index = first
+
+        self.last_right_click_index = last
+
+        # Redraw the band and the line in EVERY window
+        for p in self.plot_windows:
+            art = p["interval_artists"][interval_key]
+
+            self.clear_artists(art)
+            art["span"] = self.draw_range_span(p, state)
+            art["line"] = self.draw_interval_line(p, state)
+            p["canvas"].draw_idle()
+
+        self.refresh_line_tables()
+        self.update_hint()
+
+    # ------------------------------------------------------------------
+    # Enter = the next action of the measurement cycle
+    # ------------------------------------------------------------------
+    def bind_enter_key(self, window):
+        """Let Enter pressed in `window` do what Fix 1 / Fix 2 / Proceed do."""
+        window.bind("<Return>", self.on_enter_key, add="+")
+        window.bind("<KP_Enter>", self.on_enter_key, add="+")
+
+    def on_enter_key(self, event=None):
+        """
+        Enter performs the action the current stage is waiting for, so the
+        cycle Fix 1 -> Fix 2 -> Proceed does not need the buttons.
+        """
+        # The window may already have been left with the BACK button
+        if not (
+            hasattr(self, "DRDH_processing_frame")
+            and self.widget_alive(self.DRDH_processing_frame)
+        ):
+            return
+
+        # Enter typed into an entry field belongs to that field
+        widget = getattr(event, "widget", None)
+
+        if isinstance(widget, (tk.Entry, ttk.Entry)):
+            return
+
+        stage = self.current_stage()
+
+        if stage == "FIX_1":
+            self.fix_first()
+        elif stage == "FIX_2":
+            self.fix_second()
+        elif stage == "PROCEED":
+            self.proceed()
+
+        return "break"
+
     def make_interval_lines_infinite(self):
         for plot in self.plot_windows:
             for key in ("interval1", "interval2"):
@@ -3216,13 +3613,7 @@ class DRDH_processing:
         """
         ax = plot["ax1"]
 
-        x1 = mdates.date2num(state["left"]["time"])
-        x2 = mdates.date2num(state["right"]["time"])
-        y1 = state["left"]["R"]
-        y2 = state["right"]["R"]
-
-        slope = (y2 - y1) / (x2 - x1)
-        intercept = y1 - slope * x1
+        slope, intercept = self.get_line_params(state)
 
         x_vals = np.array(ax.get_xlim())
         y_vals = slope * x_vals + intercept
@@ -3408,13 +3799,7 @@ class DRDH_processing:
         """
         x = mdates.date2num(self.times[self.t])
 
-        x1 = mdates.date2num(state["left"]["time"])
-        x2 = mdates.date2num(state["right"]["time"])
-        y1 = state["left"]["R"]
-        y2 = state["right"]["R"]
-
-        slope = (y2 - y1) / (x2 - x1)
-        intercept = y1 - slope * x1
+        slope, intercept = self.get_line_params(state)
 
         return slope * x + intercept
 
