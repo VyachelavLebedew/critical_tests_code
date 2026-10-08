@@ -249,20 +249,33 @@ class DRDH_processing:
             key=lambda i: self.first_move_index[i]
         )
 
+    def get_group_direction(self, gi: int) -> float:
+        """+1 if the group first moved towards 100 %, -1 towards 0 %."""
+        j = self.first_move_index[gi]
+        before = self.Groups[gi][max(j - 1, 0)]
+
+        return 1.0 if self.Groups[gi][j] > before else -1.0
+
     def get_group_offsets(self) -> Dict[int, float]:
         """
-        Offset of every moving group on the common axis, so that the rulers
-        of consecutive groups join exactly at the handover point:
+        Offset of every moving group on the common axis of the DRDH plot, so
+        that the rulers of consecutive groups join at the handover point:
 
             u = offset[group] + position[group]
 
-        The offsets are derived from the data itself, not from the nominal
-        overlap: at the moment a group starts moving, the previous group
-        stands at a known position, and requiring the same `u` for both fixes
-        the offset. This works for insertion and withdrawal, with and without
-        overlap, and for any stroke length (the positions need not end at
-        100 %).
+        The offsets follow from the OVERLAP of the experiment parameters
+        (and from nothing else - it influences only the abscissa of the DRDH
+        plot): the next group starts moving when the previous one still has
+        `overlap` % of its stroke ahead, and it starts from the end of its
+        own stroke (100 % when it goes towards 0 %, 0 % when it goes towards
+        100 %). Overlap 0 means that the next group starts when the previous
+        one has finished. The stroke is taken as 0..100 %.
+
+        The direction of every group (insertion or withdrawal) is taken from
+        the data.
         """
+        overlap = min(max(self.overlap, 0.0), 100.0)
+
         offsets: Dict[int, float] = {}
         previous = None
 
@@ -270,13 +283,19 @@ class DRDH_processing:
             if previous is None:
                 offsets[gi] = 0.0
             else:
-                # the sample right before `gi` started to move
-                j = max(self.first_move_index[gi] - 1, 0)
+                # position of the previous group at the handover
+                if self.get_group_direction(previous) < 0:
+                    position_previous = overlap
+                else:
+                    position_previous = 100.0 - overlap
+
+                # position the next group starts from
+                position_next = (
+                    100.0 if self.get_group_direction(gi) < 0 else 0.0
+                )
 
                 offsets[gi] = (
-                    offsets[previous]
-                    + self.Groups[previous][j]
-                    - self.Groups[gi][j]
+                    offsets[previous] + position_previous - position_next
                 )
 
             previous = gi
@@ -1085,6 +1104,9 @@ class DRDH_processing:
 
         self.close_experiment_parameters()
 
+        # The overlap defines the abscissa of the DRDH plot
+        self.draw_drdh_plot()
+
     def close_experiment_parameters(self) -> None:
         """Close the experiment parameters window."""
 
@@ -1156,6 +1178,23 @@ class DRDH_processing:
             side=tk.LEFT, padx=GAPS['GAPS_X']['PAD_X_10'], pady=5
         )
 
+        self.load_album_data_button = SmallButtons(
+            buttons_frame,
+            text="Load album data",
+            command=self.load_album_data,
+        )
+        self.load_album_data_button.pack(
+            side=tk.LEFT, padx=GAPS['GAPS_X']['PAD_X_10'], pady=5
+        )
+
+        # Shown only while some album data is loaded
+        self.delete_album_data_button = SmallButtons(
+            buttons_frame,
+            text="Delete album data",
+            command=self.delete_album_data,
+        )
+        self.update_album_buttons()
+
         canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
         self.drdh_plot = {"fig": fig, "canvas": canvas}
@@ -1192,14 +1231,26 @@ class DRDH_processing:
             filename, dpi=300, bbox_inches="tight"
         )
 
+    def refresh_drdh_abscissas(self) -> None:
+        """
+        Place the measured points on the common axis again. The axis depends
+        on the overlap, which the user may change after the measurements.
+        """
+        for p in self.drdh_points:
+            if "idx1" in p:
+                p["u"] = self.get_program_coordinate(p["idx1"], p["idx2"])
+
     def save_drdh_data(self):
         """
         Save the points of the DRDH plot as a tab separated text file, so
-        that the curve can be replotted in any other program.
+        that the curve can be replotted in any other program. The loaded
+        album data, if any, goes into the same table, in two more columns.
         """
+        self.refresh_drdh_abscissas()
         points = [p for p in self.drdh_points if p["u"] is not None]
+        album_points = self.get_album_points()
 
-        if not points:
+        if not points and not album_points:
             Messages.show("warning", "NO_DRDH_RESULTS")
             return
 
@@ -1218,30 +1269,403 @@ class DRDH_processing:
         points = sorted(points, key=lambda p: p["u"])
         factor = DRDH_ERROR['SIGMA_FACTOR']
 
-        with open(filename, "w", encoding="utf-8") as f:
-            f.write(
-                "\t".join([
-                    "Position, %",
-                    "DRDH, pcm/cm",
-                    f"+/-{factor:g}sigma, pcm/cm",
-                    "Reference group"
-                ]) + "\n"
-            )
+        header = [
+            "Position, %",
+            "DRDH, pcm/cm",
+            f"+/-{factor:g}sigma, pcm/cm",
+            "Reference group"
+        ]
 
-            for p in points:
-                f.write(
-                    "\t".join([
+        if album_points:
+            header += ["Album position, %", "Album DRDH, pcm/cm"]
+
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write("\t".join(header) + "\n")
+
+            # The two curves have different positions and a different number
+            # of points: side by side, the shorter one is padded with blanks.
+            for i in range(max(len(points), len(album_points))):
+                if i < len(points):
+                    p = points[i]
+                    row = [
                         f"{p['u']:.{self.DECIMAL_GROUP}f}",
                         f"{p['DRDH']:.{self.DECIMAL_DRDH}f}",
                         f"{p['sigma'] * factor:.{self.DECIMAL_DRDH}f}",
                         str(p["ref_group"] or "")
-                    ]) + "\n"
+                    ]
+                else:
+                    row = [""] * 4
+
+                if album_points:
+                    if i < len(album_points):
+                        a_p = album_points[i]
+                        row += [
+                            f"{a_p['u']:.{self.DECIMAL_GROUP}f}",
+                            f"{a_p['DRDH']:.{self.DECIMAL_DRDH}f}"
+                        ]
+                    else:
+                        row += ["", ""]
+
+                f.write("\t".join(row) + "\n")
+
+    # ------------------------------------------------------------------
+    # Album data: the calculated DRDH, to be compared with the experiment
+    # ------------------------------------------------------------------
+    def load_album_data(self):
+        """
+        "Load album data" button of the DRDH plot.
+
+        Reads an Excel table with the calculated DRDH (the first sheet, the
+        first row holds the column names), lets the user say which columns
+        hold the group positions and which one the DRDH, and draws the
+        calculated curve over the measured points.
+        """
+        if not self.moving_order:
+            Messages.show(
+                "error", "VALUE_ERROR",
+                value_name="Album data",
+                error="no group has moved in this experiment, so there is "
+                      "no common position axis to put the calculation on"
+            )
+            return
+
+        initial_dir = os.path.dirname(os.path.abspath(__file__))
+
+        filename = filedialog.askopenfilename(
+            initialdir=initial_dir,
+            filetypes=[("Excel files", "*.xlsx *.xlsm")],
+            title="Load album data"
+        )
+
+        if not filename:
+            return
+
+        try:
+            headers, rows = self.read_album_table(filename)
+        except Exception as error:
+            Messages.show(
+                "error", "VALUE_ERROR",
+                value_name="Album data",
+                error=f"the file cannot be read: {error}"
+            )
+            return
+
+        if len(rows) < 2 or not headers:
+            Messages.show(
+                "error", "VALUE_ERROR",
+                value_name="Album data",
+                error="the table needs a header row and at least two rows "
+                      "of data"
+            )
+            return
+
+        parent = (
+            self.drdh_plot_window
+            if getattr(self, "drdh_plot_window", None) else self.root
+        )
+        choice = self.ask_album_columns(parent, headers)
+
+        if choice is None:
+            return
+
+        group_columns, drdh_column = choice
+        points = self.build_album_points(rows, group_columns, drdh_column)
+
+        if not points:
+            Messages.show(
+                "error", "VALUE_ERROR",
+                value_name="Album data",
+                error="no calculated point could be placed on the plot: "
+                      "check the chosen columns (a point needs a DRDH value "
+                      "and a group of the experiment that moves around it)"
+            )
+            return
+
+        self.album_data = {
+            "name": os.path.basename(filename),
+            "rows": rows,
+            "group_columns": group_columns,
+            "drdh_column": drdh_column
+        }
+        self.update_album_buttons()
+        self.draw_drdh_plot()
+
+    def get_album_points(self):
+        """The loaded album data placed on the plot; [] if none is loaded."""
+        album = getattr(self, "album_data", None)
+
+        if not album:
+            return []
+
+        return self.build_album_points(
+            album["rows"], album["group_columns"], album["drdh_column"]
+        )
+
+    def update_album_buttons(self):
+        """Show "Delete album data" only while album data is loaded."""
+        button = getattr(self, "delete_album_data_button", None)
+
+        if button is None:
+            return
+
+        button.pack_forget()
+
+        if getattr(self, "album_data", None):
+            button.pack(
+                side=tk.LEFT, padx=GAPS['GAPS_X']['PAD_X_10'], pady=5
+            )
+
+    def delete_album_data(self):
+        """Remove the calculated curve from the plot (and from Save data)."""
+        self.album_data = None
+        self.update_album_buttons()
+        self.draw_drdh_plot()
+
+    @staticmethod
+    def album_number(value) -> Optional[float]:
+        """A cell as a number; None for an empty or non numeric cell."""
+        if value is None or isinstance(value, bool):
+            return None
+
+        if isinstance(value, (int, float)):
+            return float(value)
+
+        try:
+            # a decimal comma typed as text
+            return float(str(value).strip().replace(",", "."))
+        except ValueError:
+            return None
+
+    def read_album_table(self, filename):
+        """
+        Column names (the first row) and the data rows of the first sheet.
+        Every cell is a number or None.
+        """
+        from openpyxl import load_workbook
+
+        workbook = load_workbook(filename, read_only=True, data_only=True)
+
+        try:
+            raw_rows = [
+                list(r) for r in workbook.active.iter_rows(values_only=True)
+            ]
+        finally:
+            workbook.close()
+
+        # An empty tail of the sheet is not data
+        while raw_rows and all(c is None for c in raw_rows[-1]):
+            raw_rows.pop()
+
+        if not raw_rows:
+            return [], []
+
+        width = max(len(r) for r in raw_rows)
+        raw_rows = [r + [None] * (width - len(r)) for r in raw_rows]
+
+        headers = [
+            str(c).strip() if c is not None and str(c).strip()
+            else f"Column {get_column_letter(i + 1)}"
+            for i, c in enumerate(raw_rows[0])
+        ]
+        rows = [[self.album_number(c) for c in r] for r in raw_rows[1:]]
+
+        return headers, rows
+
+    def ask_album_columns(self, parent, headers):
+        """
+        Ask which column holds the position of every group that moved in the
+        experiment and which one holds the DRDH.
+
+        Returns ({group index: column index}, DRDH column index) or None if
+        the user cancelled.
+        """
+        labels = [
+            f"{get_column_letter(i + 1)}: {h}" for i, h in enumerate(headers)
+        ]
+        result = {"value": None}
+
+        dialog = tk.Toplevel(parent)
+        dialog.title("Album data columns")
+        dialog.config(bg=COLORS['BACKGROUND_COLOR'])
+        dialog.resizable(False, False)
+        dialog.transient(parent)
+        dialog.grab_set()
+
+        tk.Label(
+            dialog,
+            text="Which column holds what?",
+            font=FONTS['DATA_FONT'], bg=COLORS['BACKGROUND_COLOR']
+        ).grid(row=0, column=0, columnspan=2, padx=15, pady=(12, 8))
+
+        def add_choice(row, text, preselect=None):
+            tk.Label(
+                dialog, text=text,
+                font=FONTS['DATA_FONT'], bg=COLORS['BACKGROUND_COLOR']
+            ).grid(row=row, column=0, sticky="e", padx=(15, 5), pady=4)
+
+            box = ttk.Combobox(
+                dialog, values=labels, state="readonly", width=24
+            )
+            box.grid(row=row, column=1, sticky="w", padx=(0, 15), pady=4)
+
+            if preselect is not None:
+                box.current(preselect)
+
+            return box
+
+        group_boxes = {}
+
+        for row, gi in enumerate(self.moving_order, start=1):
+            name = self.Group_names[gi]
+
+            # A column called like the group is the obvious guess
+            guess = next(
+                (i for i, h in enumerate(headers)
+                 if h.strip().casefold() == name.strip().casefold()),
+                None
+            )
+            group_boxes[gi] = add_choice(row, f"Position of {name}:", guess)
+
+        drdh_box = add_choice(len(group_boxes) + 1, "DRDH:")
+
+        def accept():
+            boxes = list(group_boxes.values()) + [drdh_box]
+
+            if any(box.current() < 0 for box in boxes):
+                Messages.show(
+                    "error", "VALUE_ERROR",
+                    value_name="Columns",
+                    error="choose a column for every field"
                 )
+                return
+
+            result["value"] = (
+                {gi: box.current() for gi, box in group_boxes.items()},
+                drdh_box.current()
+            )
+            dialog.destroy()
+
+        buttons = tk.Frame(dialog, bg=COLORS['BACKGROUND_COLOR'])
+        buttons.grid(
+            row=len(group_boxes) + 2, column=0, columnspan=2, pady=(8, 12)
+        )
+        SmallButtons(buttons, text="OK", command=accept).pack(
+            side=tk.LEFT, padx=GAPS['GAPS_X']['PAD_X_10']
+        )
+        SmallButtons(buttons, text="Cancel", command=dialog.destroy).pack(
+            side=tk.LEFT, padx=GAPS['GAPS_X']['PAD_X_10']
+        )
+
+        self.root.wait_window(dialog)
+
+        return result["value"]
+
+    @staticmethod
+    def album_line(points):
+        """
+        x and y of the calculated curve, with a break (NaN) wherever the
+        reference group changes AND the abscissa jumps.
+
+        Such a jump appears when the overlap set in the parameters differs
+        from the one the calculation was made with: the two groups then do
+        not join at the same point of the common axis, and a straight line
+        across the gap would show a dependence which does not exist.
+        """
+        xs = [p["u"] for p in points]
+        ys = [p["DRDH"] for p in points]
+
+        if len(points) < 3:
+            return xs, ys
+
+        gaps = np.abs(np.diff(xs))
+        typical = float(np.median(gaps))
+        limit = 3.0 * typical if typical > 0 else np.inf
+
+        out_x, out_y = [xs[0]], [ys[0]]
+
+        for i in range(1, len(points)):
+            if points[i]["ref"] != points[i - 1]["ref"] and gaps[i - 1] > limit:
+                out_x.append(np.nan)
+                out_y.append(np.nan)
+
+            out_x.append(xs[i])
+            out_y.append(ys[i])
+
+        return out_x, out_y
+
+    def build_album_points(self, rows, group_columns, drdh_column):
+        """
+        Put the calculated DRDH on the same axis as the measured one.
+
+        A DRDH of the table belongs to the group positions of its own row.
+        The reference group is chosen as for a measured step: the group with
+        the highest number among those that move around the row (the
+        neighbour rows differ in its position). The abscissa is the honest
+        position of that group in the row on the common axis of the plot
+        (see get_group_offsets), so a table step of 2 % is a step of 2 % on
+        the plot. The calculation joins smoothly where the overlap set in the
+        parameters is the overlap of the calculation.
+
+        The calculated rows need not coincide with the measured steps -
+        only the group positions matter. Rows without a DRDH, rows with a
+        missing position and rows in which no group of the experiment moves
+        are skipped.
+        """
+        offsets = self.get_group_offsets()
+        points = []
+
+        for r in range(len(rows)):
+            drdh = rows[r][drdh_column]
+
+            if drdh is None:
+                continue
+
+            current = {gi: rows[r][c] for gi, c in group_columns.items()}
+
+            if None in current.values():
+                continue
+
+            # The neighbours decide who is moving; the first and the last
+            # row only have one.
+            before = rows[max(r - 1, 0)]
+            after = rows[min(r + 1, len(rows) - 1)]
+
+            moved = []
+
+            for gi in self.moving_order:
+                if gi not in group_columns:
+                    continue
+
+                a = before[group_columns[gi]]
+                b = after[group_columns[gi]]
+
+                if a is not None and b is not None and not np.isclose(a, b):
+                    moved.append(gi)
+
+            if not moved:
+                continue
+
+            ref = max(
+                moved,
+                key=lambda gi: self.group_number(self.Group_names[gi])
+            )
+            u = offsets[ref] + current[ref]
+
+            points.append({
+                "u": float(u),
+                "DRDH": float(drdh),
+                "ref": ref
+            })
+
+        # The rows of the table are the trajectory of the calculation: keep
+        # their order, so that the line follows it.
+        return points
 
     def close_drdh_plot_window(self):
         """Drop the references when the user closes the DRDH plot window."""
         for attr in ("drdh_plot", "save_drdh_plot_button",
-                     "save_drdh_data_button"):
+                     "save_drdh_data_button", "load_album_data_button",
+                     "delete_album_data_button"):
             if hasattr(self, attr):
                 delattr(self, attr)
 
@@ -1273,8 +1697,14 @@ class DRDH_processing:
 
         offsets = self.get_group_offsets()
 
+        self.refresh_drdh_abscissas()
         points = [p for p in self.drdh_points if p["u"] is not None]
         points.sort(key=lambda p: p["u"])
+
+        # Calculated curve loaded with "Load album data" (may be absent).
+        # It is placed here, not when loaded, because the axis depends on the
+        # overlap, which may be changed later.
+        album_points = self.get_album_points()
 
         # The rulers stop at 100 %, but a group may physically go a bit
         # further (e.g. 103.66 %), so the axis still has to show such points.
@@ -1282,8 +1712,23 @@ class DRDH_processing:
             (max(offsets.values()) if offsets else 0.0)
             + DRDH_PLOT['RULER_MAX']
         )
-        u_min = min([0.0] + [p["u"] for p in points])
-        u_max = max([ruler_end] + [p["u"] for p in points])
+        u_min = min([0.0] + [p["u"] for p in points + album_points])
+        u_max = max([ruler_end] + [p["u"] for p in points + album_points])
+
+        # Below the experiment (zorder 4 and 5), so that it never hides it
+        if album_points:
+            album_xs, album_ys = self.album_line(album_points)
+
+            ax.plot(
+                album_xs,
+                album_ys,
+                color=DRDH_PLOT.get('ALBUM_COLOR', "#2E7D32"),
+                linewidth=DRDH_PLOT.get('ALBUM_WIDTH', 1.6),
+                marker='o',
+                markersize=DRDH_PLOT.get('ALBUM_POINT_SIZE', 3),
+                label="Album data",
+                zorder=3
+            )
 
         if points:
             us = np.array([p["u"] for p in points])
@@ -1311,12 +1756,25 @@ class DRDH_processing:
                 label="Experiment",
                 zorder=5
             )
-            ax.legend(frameon=True, loc="best")
 
-            top = float(np.max(ys + errs))
-            bottom = float(np.min(ys - errs))
+        # The vertical range has to hold both the experiment and the album
+        tops, bottoms = [], []
+
+        if points:
+            tops.append(float(np.max(ys + errs)))
+            bottoms.append(float(np.min(ys - errs)))
+
+        if album_points:
+            album_values = [p["DRDH"] for p in album_points]
+            tops.append(max(album_values))
+            bottoms.append(min(album_values))
+
+        if tops:
+            top = max(tops)
+            bottom = min(bottoms)
             margin = 0.12 * max(top - bottom, 1e-9)
             ax.set_ylim(min(0.0, bottom - margin), top + margin)
+            ax.legend(frameon=True, loc="best")
 
         ax.set_ylabel(DRDH_PLOT['Y_LABEL'], fontsize=PLOT['PLOT_LABEL_SIZE'])
         ax.set_xlim(u_min - 3, u_max + 3)
@@ -2113,6 +2571,9 @@ class DRDH_processing:
 
         self.drdh_points.append({
             "u": self.get_program_coordinate(idx1, idx2),
+            # kept to place the point again when the overlap is changed
+            "idx1": idx1,
+            "idx2": idx2,
             "DRDH": DRDH_pcm,
             "sigma": self.get_drdh_sigma(
                 delta_rho_pcm, delta_H_cm, DRDH_pcm
