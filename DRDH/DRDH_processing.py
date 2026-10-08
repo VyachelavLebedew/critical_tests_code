@@ -44,6 +44,11 @@ RANGE_MIN_POINTS = 3
 # A press-and-release closer than that (pixels) is a click, not a range
 RANGE_MIN_DRAG_PX = 4
 
+# When several groups moved, the one that moved clearly farther is the
+# leading one. Shifts that differ by no more than this (% of the stroke)
+# are treated as equal and the group that started moving first wins.
+LEADING_GROUP_TOLERANCE = 1.0
+
 # Stages in which Enter performs the next action (Fix 1 / Fix 2 / Proceed)
 ENTER_STAGES = ("FIX_1", "FIX_1_INHERITED", "FIX_2", "PROCEED")
 ENTER_HINT = "\n(or press Enter)"
@@ -287,10 +292,18 @@ class DRDH_processing:
         The group whose displacement is used as the denominator of the DRDH.
 
         Only one group defines the step, even when two of them move at the
-        same time: during a handover the worth is referred to the group that
-        started moving first. For a handover 12 -> 11 that is group 12.
+        same time, so that the displacement is not counted twice.
 
-        Without overlap only one group moves anyway, so the choice is trivial.
+        One group moved   -> that group.
+        Several moved     -> if their shifts differ by more than
+                             LEADING_GROUP_TOLERANCE, the group that moved
+                             farther. This is the end of one group's stroke
+                             overlapping the start of the next one's: the
+                             group that merely finished its last percent must
+                             not become the denominator of the whole step.
+                             Otherwise (a real simultaneous movement) the
+                             group that started moving first, e.g. group 12
+                             for a handover 12 -> 11.
         """
         moved = [
             gi for gi in self.moving_order
@@ -299,6 +312,15 @@ class DRDH_processing:
 
         if not moved:
             return None
+
+        if len(moved) > 1:
+            shifts = {
+                gi: abs(self.Groups[gi][idx2] - self.Groups[gi][idx1])
+                for gi in moved
+            }
+
+            if max(shifts.values()) - min(shifts.values()) > LEADING_GROUP_TOLERANCE:
+                return max(moved, key=lambda gi: shifts[gi])
 
         # self.moving_order is sorted by the first movement of every group,
         # so the first entry is the one that started moving earliest.
