@@ -71,7 +71,9 @@ class DRDH_processing:
         self.DRDH_frame: Optional[tk.Frame] = None
         self.beta: float = self.main_app.main_app.beta
         self.Group_length = self.main_app.Group_length
-        # Overlap of the control groups, %. 0 -> no overlap.
+        # Handover point, %: the position of a group (as read on its ruler)
+        # at which the next one starts moving. Shapes only the abscissa of
+        # the DRDH plot (get_group_offsets).
         self.overlap: float = float(getattr(self.main_app, "overlap", 0) or 0)
 
         # Movement type chosen in DRDH_module: 'Withdrawal', 'Insertion'
@@ -249,62 +251,55 @@ class DRDH_processing:
             key=lambda i: self.first_move_index[i]
         )
 
-    def get_group_direction(self, gi: int) -> float:
-        """+1 if the group first moved towards 100 %, -1 towards 0 %."""
+    def get_group_start_position(self, gi: int) -> float:
+        """
+        Where the group stood before it started moving, %. Taken from the
+        data: a group does not have to start from the very end of its stroke
+        (e.g. from 4 % rather than from 0 %).
+        """
         j = self.first_move_index[gi]
-        before = self.Groups[gi][max(j - 1, 0)]
 
-        return 1.0 if self.Groups[gi][j] > before else -1.0
+        return float(self.Groups[gi][max(j - 1, 0)])
 
     def get_group_offsets(self) -> Dict[int, float]:
         """
-        Offset of every moving group on the common axis of the DRDH plot, so
-        that the rulers of consecutive groups join at the handover point:
+        Offset of every moving group on the common axis of the DRDH plot:
 
             u = offset[group] + position[group]
 
-        The offsets follow from the OVERLAP of the experiment parameters
-        (and from nothing else - it influences only the abscissa of the DRDH
-        plot): the next group starts moving when the previous one still has
-        `overlap` % of its stroke ahead, and it starts from the end of its
-        own stroke (100 % when it goes towards 0 %, 0 % when it goes towards
-        100 %). Overlap 0 means that the next group starts when the previous
-        one has finished. The stroke is taken as 0..100 %.
+        The axis is a telescope that is pulled out from the LEADING group,
+        the one that starts moving first. Its ruler stays where it is
+        (offset 0); everything else follows from it:
 
-        The direction of every group (insertion or withdrawal) is taken from
-        the data.
+            - the groups take turns in the order they start moving;
+            - the next group starts when the previous one stands at the
+              `overlap` mark of ITS ruler, so the next ruler is hung there:
+              with 25 the second group starts when the first reads 25, the
+              third when the second reads 25, and so on. The next group
+              starts from the position it really stood at before it began
+              to move (get_group_start_position), so the handover is right
+              also for a group that starts from 4 %, or from any other
+              position, instead of the very end of its stroke.
+
+        The overlap shapes nothing but the abscissa of this plot. The rulers
+        of the following groups may lie to the left or to the right of the
+        leading one, depending on the direction of the movement, so the
+        offsets are not shifted to be positive: that would move the leading
+        group when the overlap changes.
         """
-        overlap = min(max(self.overlap, 0.0), 100.0)
-
-        offsets: Dict[int, float] = {}
-        previous = None
-
-        for gi in self.moving_order:
-            if previous is None:
-                offsets[gi] = 0.0
-            else:
-                # position of the previous group at the handover
-                if self.get_group_direction(previous) < 0:
-                    position_previous = overlap
-                else:
-                    position_previous = 100.0 - overlap
-
-                # position the next group starts from
-                position_next = (
-                    100.0 if self.get_group_direction(gi) < 0 else 0.0
-                )
-
-                offsets[gi] = (
-                    offsets[previous] + position_previous - position_next
-                )
-
-            previous = gi
-
-        if not offsets:
+        if not self.moving_order:
             return {}
 
-        shift = min(offsets.values())
-        return {gi: v - shift for gi, v in offsets.items()}
+        overlap = min(max(self.overlap, 0.0), 100.0)
+
+        offsets = {self.moving_order[0]: 0.0}
+
+        for previous, gi in zip(self.moving_order, self.moving_order[1:]):
+            offsets[gi] = (
+                offsets[previous] + overlap - self.get_group_start_position(gi)
+            )
+
+        return offsets
 
     def get_leading_group(self, idx1: int, idx2: int) -> Optional[int]:
         """
@@ -1566,10 +1561,10 @@ class DRDH_processing:
         x and y of the calculated curve, with a break (NaN) wherever the
         reference group changes AND the abscissa jumps.
 
-        Such a jump appears when the overlap set in the parameters differs
-        from the one the calculation was made with: the two groups then do
-        not join at the same point of the common axis, and a straight line
-        across the gap would show a dependence which does not exist.
+        Such a jump appears when the groups of the table do not join (the
+        calculation skips a part of the stroke, or the groups move at
+        different speeds), and a straight line across the gap would show a
+        dependence which does not exist.
         """
         xs = [p["u"] for p in points]
         ys = [p["DRDH"] for p in points]
@@ -1593,6 +1588,73 @@ class DRDH_processing:
 
         return out_x, out_y
 
+    def get_album_offsets(self, rows, group_columns):
+        """
+        Offsets of the groups on the common axis for the ALBUM data.
+
+        The handover of the calculation is found in the table itself, and
+        the overlap of the experiment parameters plays no part in it: the
+        groups are put in the order they start to move; a group joins the
+        previous one at the row before its own first movement, where the
+        previous group stands at the position it hands the movement over
+        from. So the calculated curve is continuous, and a step of the table
+        is a step of the plot.
+
+        The two axes are tied together at the leading group: the first group
+        (in the order the groups start moving in the experiment) that moves
+        in the table has the same offset in both. The leading group does not
+        move on the axis when the overlap is changed, so neither does the
+        calculation; the other rulers of the experiment differ from the
+        calculated handovers by the difference of the overlaps.
+
+        Returns {group index: offset}; groups that do not move in the table
+        have no offset.
+        """
+        series = {}
+        start = {}
+
+        for gi, column in group_columns.items():
+            values = [row[column] for row in rows]
+            known = [v for v in values if v is not None]
+
+            if not known:
+                continue
+
+            # fill the gaps with the nearest known value
+            filled, last = [], known[0]
+            for v in values:
+                last = v if v is not None else last
+                filled.append(last)
+
+            series[gi] = np.asarray(filled, dtype=float)
+            moved = np.flatnonzero(~np.isclose(series[gi], series[gi][0]))
+
+            if moved.size:
+                start[gi] = int(moved[0])
+
+        if not start:
+            return {}
+
+        order = sorted(start, key=lambda gi: start[gi])
+        relative = {order[0]: 0.0}
+
+        for previous, gi in zip(order, order[1:]):
+            row = start[gi] - 1
+            relative[gi] = (
+                relative[previous] + series[previous][row] - series[gi][row]
+            )
+
+        experiment = self.get_group_offsets()
+        anchor = next(
+            (gi for gi in self.moving_order if gi in relative),
+            order[0]
+        )
+
+        return {
+            gi: v - relative[anchor] + experiment.get(anchor, 0.0)
+            for gi, v in relative.items()
+        }
+
     def build_album_points(self, rows, group_columns, drdh_column):
         """
         Put the calculated DRDH on the same axis as the measured one.
@@ -1601,17 +1663,17 @@ class DRDH_processing:
         The reference group is chosen as for a measured step: the group with
         the highest number among those that move around the row (the
         neighbour rows differ in its position). The abscissa is the honest
-        position of that group in the row on the common axis of the plot
-        (see get_group_offsets), so a table step of 2 % is a step of 2 % on
-        the plot. The calculation joins smoothly where the overlap set in the
-        parameters is the overlap of the calculation.
+        position of that group in the row on the common axis of the plot,
+        whose offsets for the calculation come from the table itself
+        (get_album_offsets), not from the overlap: a table step of 2 % is a
+        step of 2 % on the plot, whatever the overlap of the experiment.
 
         The calculated rows need not coincide with the measured steps -
         only the group positions matter. Rows without a DRDH, rows with a
         missing position and rows in which no group of the experiment moves
         are skipped.
         """
-        offsets = self.get_group_offsets()
+        offsets = self.get_album_offsets(rows, group_columns)
         points = []
 
         for r in range(len(rows)):
@@ -1633,7 +1695,7 @@ class DRDH_processing:
             moved = []
 
             for gi in self.moving_order:
-                if gi not in group_columns:
+                if gi not in group_columns or gi not in offsets:
                     continue
 
                 a = before[group_columns[gi]]
@@ -1708,11 +1770,12 @@ class DRDH_processing:
 
         # The rulers stop at 100 %, but a group may physically go a bit
         # further (e.g. 103.66 %), so the axis still has to show such points.
+        ruler_start = min(offsets.values()) if offsets else 0.0
         ruler_end = (
             (max(offsets.values()) if offsets else 0.0)
             + DRDH_PLOT['RULER_MAX']
         )
-        u_min = min([0.0] + [p["u"] for p in points + album_points])
+        u_min = min([ruler_start] + [p["u"] for p in points + album_points])
         u_max = max([ruler_end] + [p["u"] for p in points + album_points])
 
         # Below the experiment (zorder 4 and 5), so that it never hides it
@@ -1798,7 +1861,8 @@ class DRDH_processing:
 
     def draw_group_rulers(self, ax, offsets):
         """
-        One 0..100 % ruler per moving group, shifted by the overlap, so that
+        One 0..100 % ruler per moving group, in the order the groups start
+        moving, each shifted by the overlap (see get_group_offsets), so that
         the handover point of two groups falls on the same vertical line.
         """
         step = DRDH_PLOT['RULER_STEP']
@@ -2517,10 +2581,10 @@ class DRDH_processing:
         idx1 = self.selection_state["interval1"]["right"]["index"]
         idx2 = self.selection_state["interval2"]["right"]["index"]
 
-        # R1/R2 - ординаты пересечения жёлтых прямых с красной вертикалью.
-        # Они уже посчитаны в draw_intersection_points() выше (зелёные точки),
-        # поэтому итоговый результат совпадает с онлайн-таблицей
-        # в окне "Current values".
+        # R1/R2 are the ordinates where the yellow lines cross the red
+        # vertical line. They have already been calculated in
+        # draw_intersection_points() above (the green points), so the final
+        # result matches the online table in the "Current values" window.
         R1 = self.p1_R
         R2 = self.p2_R
 
@@ -4277,8 +4341,8 @@ class DRDH_processing:
 
     def get_line_intersection(self, state):
         """
-        Возвращает R в точке пересечения жёлтой линии
-        с текущей красной вертикалью (координату У)
+        Returns R where the yellow line crosses the current red vertical
+        line (the Y coordinate of the crossing).
         """
         x = mdates.date2num(self.times[self.t])
 
@@ -4450,17 +4514,17 @@ class DRDH_processing:
         state1 = self.selection_state["interval1"]
         state2 = self.selection_state["interval2"]
 
-        # значения R на пересечении желтых линий с красной
+        # R values where the yellow lines cross the red one
         R1 = self.get_line_intersection(state1) if state1["left"] and state1["right"] else 0
         R2 = self.get_line_intersection(state2) if state2["left"] and state2["right"] else 0
         delta_R = R2 - R1
 
-        # значения групп для ΔH
+        # group positions for ΔH
         H1_vals = [g[state1["right"]["index"]] if state1["right"] else 0 for g in self.Groups]
         H2_vals = [g[state2["right"]["index"]] if state2["right"] else 0 for g in self.Groups]
         delta_H_vals = [h2 - h1 for h1, h2 in zip(H1_vals, H2_vals)]
 
-        # Обновление первой строки (R1, R2, ΔR)
+        # Update the first row (R1, R2, ΔR)
         unit = self.reactivity_unit()
         R1_disp = self.to_display_reactivity(R1)
         R2_disp = self.to_display_reactivity(R2)
@@ -4471,14 +4535,15 @@ class DRDH_processing:
                   f"ΔR, {unit}", f"{delta_R_disp:.{self.DECIMAL_REACT}f}"]
         self.drdh_table.item(self.drdh_table.get_children()[0], values=values)
 
-        # Обновление второй строки (H1, H2, ΔH)
+        # Update the second row (H1, H2, ΔH)
         values = ["H1, %"] + [f"{v:.{self.DECIMAL_GROUP}f}" for v in H1_vals[:3]] + \
                 ["H2, %"] + [f"{v:.{self.DECIMAL_GROUP}f}" for v in H2_vals[:3]] + \
                 ["ΔH, %"] + [f"{v:.{self.DECIMAL_GROUP}f}" for v in delta_H_vals[:3]]
         self.drdh_table.item(self.drdh_table.get_children()[1], values=values)
 
-        # DRDH вычисляется при наличии ΔH.
-        # Знаменатель - перемещение ведущей группы, как и в proceed().
+        # DRDH is calculated when ΔH is available.
+        # The denominator is the displacement of the leading group, as in
+        # proceed().
         DRDH = 0
 
         if delta_H_vals and state1["right"] and state2["right"]:
