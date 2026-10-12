@@ -1188,6 +1188,20 @@ class DRDH_processing:
             text="Delete album data",
             command=self.delete_album_data,
         )
+
+        # Shown only while album data is loaded (and not yet interpolated)
+        self.interpolate_album_button = SmallButtons(
+            buttons_frame,
+            text="Interpolate",
+            command=self.interpolate_album,
+        )
+
+        # Shown only while the interpolated album data is on the plot
+        self.remove_interpolation_button = SmallButtons(
+            buttons_frame,
+            text="Remove interpolation",
+            command=self.remove_album_interpolation,
+        )
         self.update_album_buttons()
 
         canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
@@ -1238,12 +1252,21 @@ class DRDH_processing:
     def save_drdh_data(self):
         """
         Save the points of the DRDH plot as a tab separated text file, so
-        that the curve can be replotted in any other program. The loaded
-        album data, if any, goes into the same table, in two more columns.
+        that the curve can be replotted in any other program.
+
+        All the data share ONE position column (the common axis of the
+        plot), sorted ascending. Every row holds what lies at that position:
+        the measured DRDH with its error, the album DRDH and, after
+        "Interpolate", the album DRDH interpolated at the measured step. A
+        cell is blank where the curve has no point at that position.
         """
         self.refresh_drdh_abscissas()
         points = [p for p in self.drdh_points if p["u"] is not None]
+        points.sort(key=lambda p: p["u"])
         album_points = self.get_album_points()
+        interpolate = (
+            bool(album_points) and getattr(self, "album_interpolated", False)
+        )
 
         if not points and not album_points:
             Messages.show("warning", "NO_DRDH_RESULTS")
@@ -1261,8 +1284,45 @@ class DRDH_processing:
         if not filename:
             return
 
-        points = sorted(points, key=lambda p: p["u"])
         factor = DRDH_ERROR['SIGMA_FACTOR']
+
+        # One row per measured step; the interpolated album value belongs
+        # to the same row, because it is taken at that very position.
+        if interpolate:
+            interpolated = self.interpolate_album_values(
+                album_points, [p["u"] for p in points]
+            )
+        else:
+            interpolated = [None] * len(points)
+
+        rows = []
+        by_position = {}
+
+        for p, value in zip(points, interpolated):
+            row = {"u": p["u"], "exp": p, "album": None, "interp": value}
+            rows.append(row)
+            by_position.setdefault(round(p["u"], 6), row)
+
+        # An album point at the position of a measured step shares its row;
+        # any other one gets a row of its own.
+        for a_p in album_points:
+            row = by_position.get(round(a_p["u"], 6))
+
+            if row is not None and row["album"] is None:
+                row["album"] = a_p["DRDH"]
+                continue
+
+            row = {
+                "u": a_p["u"], "exp": None,
+                "album": a_p["DRDH"], "interp": None
+            }
+            rows.append(row)
+            by_position.setdefault(round(a_p["u"], 6), row)
+
+        rows.sort(key=lambda r: r["u"])
+
+        def fmt(value, decimals):
+            return "" if value is None else f"{value:.{decimals}f}"
 
         header = [
             "Position, %",
@@ -1272,36 +1332,34 @@ class DRDH_processing:
         ]
 
         if album_points:
-            header += ["Album position, %", "Album DRDH, pcm/cm"]
+            header.append("Album DRDH, pcm/cm")
+
+        if interpolate:
+            header.append("Album interpolated DRDH, pcm/cm")
 
         with open(filename, "w", encoding="utf-8") as f:
             f.write("\t".join(header) + "\n")
 
-            # The two curves have different positions and a different number
-            # of points: side by side, the shorter one is padded with blanks.
-            for i in range(max(len(points), len(album_points))):
-                if i < len(points):
-                    p = points[i]
-                    row = [
-                        f"{p['u']:.{self.DECIMAL_GROUP}f}",
-                        f"{p['DRDH']:.{self.DECIMAL_DRDH}f}",
-                        f"{p['sigma'] * factor:.{self.DECIMAL_DRDH}f}",
+            for r in rows:
+                p = r["exp"]
+                line = [fmt(r["u"], self.DECIMAL_GROUP)]
+
+                if p is not None:
+                    line += [
+                        fmt(p["DRDH"], self.DECIMAL_DRDH),
+                        fmt(p["sigma"] * factor, self.DECIMAL_DRDH),
                         str(p["ref_group"] or "")
                     ]
                 else:
-                    row = [""] * 4
+                    line += [""] * 3
 
                 if album_points:
-                    if i < len(album_points):
-                        a_p = album_points[i]
-                        row += [
-                            f"{a_p['u']:.{self.DECIMAL_GROUP}f}",
-                            f"{a_p['DRDH']:.{self.DECIMAL_DRDH}f}"
-                        ]
-                    else:
-                        row += ["", ""]
+                    line.append(fmt(r["album"], self.DECIMAL_DRDH))
 
-                f.write("\t".join(row) + "\n")
+                if interpolate:
+                    line.append(fmt(r["interp"], self.DECIMAL_DRDH))
+
+                f.write("\t".join(line) + "\n")
 
     # ------------------------------------------------------------------
     # Album data: the calculated DRDH, to be compared with the experiment
@@ -1382,6 +1440,7 @@ class DRDH_processing:
             "group_columns": group_columns,
             "drdh_column": drdh_column
         }
+        self.album_interpolated = False
         self.update_album_buttons()
         self.draw_drdh_plot()
 
@@ -1397,24 +1456,163 @@ class DRDH_processing:
         )
 
     def update_album_buttons(self):
-        """Show "Delete album data" only while album data is loaded."""
-        button = getattr(self, "delete_album_data_button", None)
+        """
+        Show the album buttons only when they make sense:
+        "Delete album data" while album data is loaded, "Interpolate" while
+        it is loaded and not interpolated yet, "Remove interpolation" while
+        the interpolated data is on the plot.
+        """
+        loaded = bool(getattr(self, "album_data", None))
+        interpolated = loaded and getattr(self, "album_interpolated", False)
 
-        if button is None:
-            return
+        wanted = (
+            ("delete_album_data_button", loaded),
+            ("interpolate_album_button", loaded and not interpolated),
+            ("remove_interpolation_button", interpolated),
+        )
 
-        button.pack_forget()
+        for attr, visible in wanted:
+            button = getattr(self, attr, None)
 
-        if getattr(self, "album_data", None):
-            button.pack(
-                side=tk.LEFT, padx=GAPS['GAPS_X']['PAD_X_10'], pady=5
-            )
+            if button is None:
+                continue
+
+            button.pack_forget()
+
+            if visible:
+                button.pack(
+                    side=tk.LEFT, padx=GAPS['GAPS_X']['PAD_X_10'], pady=5
+                )
 
     def delete_album_data(self):
         """Remove the calculated curve from the plot (and from Save data)."""
         self.album_data = None
+        self.album_interpolated = False
         self.update_album_buttons()
         self.draw_drdh_plot()
+
+    def interpolate_album(self):
+        """
+        "Interpolate" button of the DRDH plot.
+
+        Adds the album curve interpolated at the positions of the measured
+        steps, so that the calculation and the experiment can be compared
+        point by point. The interpolation is recomputed on every redraw, so
+        it follows new measurements and a changed overlap.
+        """
+        album_points = self.get_album_points()
+
+        if not album_points:
+            return
+
+        self.refresh_drdh_abscissas()
+        points = [p for p in self.drdh_points if p["u"] is not None]
+
+        if not points:
+            Messages.show("warning", "NO_DRDH_RESULTS")
+            return
+
+        values = self.interpolate_album_values(
+            album_points, [p["u"] for p in points]
+        )
+
+        if all(v is None for v in values):
+            Messages.show(
+                "error", "VALUE_ERROR",
+                value_name="Album data",
+                error="no measured step lies within the calculated curve, "
+                      "so there is nothing to interpolate"
+            )
+            return
+
+        self.album_interpolated = True
+        self.update_album_buttons()
+        self.draw_drdh_plot()
+
+    def remove_album_interpolation(self):
+        """Take the interpolated album data off the plot and Save data."""
+        self.album_interpolated = False
+        self.update_album_buttons()
+        self.draw_drdh_plot()
+
+    @staticmethod
+    def interpolate_album_values(album_points, targets):
+        """
+        The album DRDH at the given positions, by linear interpolation
+        between the neighbouring calculated points. Returns a list aligned
+        with `targets`; None where the position lies outside the calculated
+        curve or in a break of it (the same break as album_line draws: the
+        reference group changes AND the abscissa jumps), since there is no
+        honest value to interpolate there.
+        """
+        if len(album_points) < 2:
+            return [None] * len(targets)
+
+        pts = sorted(album_points, key=lambda p: p["u"])
+        xs = np.array([p["u"] for p in pts], dtype=float)
+        ys = np.array([p["DRDH"] for p in pts], dtype=float)
+        refs = [p["ref"] for p in pts]
+
+        # Points with the same abscissa (e.g. at a handover) are averaged
+        ux, first, inverse = np.unique(
+            xs, return_index=True, return_inverse=True
+        )
+        uy = np.bincount(inverse, weights=ys) / np.bincount(inverse)
+        uref = [refs[i] for i in first]
+
+        if len(ux) < 2:
+            return [None] * len(targets)
+
+        gaps = np.diff(ux)
+        limit = 3.0 * float(np.median(gaps))
+        eps = 1e-9
+        result = []
+
+        for t in targets:
+            if t < ux[0] - eps or t > ux[-1] + eps:
+                result.append(None)
+                continue
+
+            j = int(np.searchsorted(ux, t - eps))
+
+            if j >= len(ux):
+                result.append(float(uy[-1]))
+                continue
+
+            if j == 0 or abs(ux[j] - t) <= eps:
+                result.append(float(uy[j]))
+                continue
+
+            lo, hi = j - 1, j
+
+            if uref[lo] != uref[hi] and gaps[lo] > limit:
+                result.append(None)
+                continue
+
+            k = (t - ux[lo]) / (ux[hi] - ux[lo])
+            result.append(float(uy[lo] + (uy[hi] - uy[lo]) * k))
+
+        return result
+
+    def get_interpolated_album_points(self, points, album_points):
+        """
+        The interpolated album data placed at the given measured points, as
+        [{"u", "DRDH"}]; [] while "Interpolate" is off.
+        """
+        if not getattr(self, "album_interpolated", False):
+            return []
+
+        if not album_points or not points:
+            return []
+
+        values = self.interpolate_album_values(
+            album_points, [p["u"] for p in points]
+        )
+
+        return [
+            {"u": p["u"], "DRDH": v}
+            for p, v in zip(points, values) if v is not None
+        ]
 
     @staticmethod
     def album_number(value) -> Optional[float]:
@@ -1727,7 +1925,9 @@ class DRDH_processing:
         """Drop the references when the user closes the DRDH plot window."""
         for attr in ("drdh_plot", "save_drdh_plot_button",
                      "save_drdh_data_button", "load_album_data_button",
-                     "delete_album_data_button"):
+                     "delete_album_data_button",
+                     "interpolate_album_button",
+                     "remove_interpolation_button"):
             if hasattr(self, attr):
                 delattr(self, attr)
 
@@ -1790,6 +1990,25 @@ class DRDH_processing:
                 marker='o',
                 markersize=DRDH_PLOT.get('ALBUM_POINT_SIZE', 3),
                 label="Album data",
+                zorder=3
+            )
+
+        # The album curve taken at the measured steps ("Interpolate")
+        interpolated = self.get_interpolated_album_points(
+            points, album_points
+        )
+
+        if interpolated:
+            ax.plot(
+                [p["u"] for p in interpolated],
+                [p["DRDH"] for p in interpolated],
+                linestyle='none',
+                marker='D',
+                markersize=DRDH_PLOT.get('ALBUM_INTERP_SIZE', 5),
+                markerfacecolor='white',
+                markeredgecolor=DRDH_PLOT.get('ALBUM_COLOR', "#2E7D32"),
+                markeredgewidth=1.3,
+                label="Album data (interpolated)",
                 zorder=3
             )
 
