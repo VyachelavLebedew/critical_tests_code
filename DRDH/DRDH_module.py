@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, simpledialog, messagebox
 from typing import Any, Optional, List
 import pandas as pd
 
@@ -11,6 +11,14 @@ from Settings import (
     HEADER_FRAME_HEIGHT, MOUSE_WHEEL_DELTA, NFME_BUTTONS, MINSIZE_RIGHT_FRAME,
     MINSIZE_RIGHT_HEADER, LEFT_CANVAS_WIDTH, GROUP_MAP
 )
+
+
+# Combobox item that adds an auxiliary (not used in the DRDH computation)
+# parameter, which is only shown on the DRDH_processing plot.
+ADD_PARAMETER = "Add new parameter"
+
+# Prefix of auxiliary parameters in the NFME_parameters list
+EXTRA_PREFIX = "Added: "
 
 
 class DRDH_module:
@@ -113,6 +121,11 @@ class DRDH_module:
         self.computed_parameters: List[str] = []
         self.selected_column_buttons: dict[str, tk.Button] = {}
         self.parameter_columns: dict[str, list[str]] = {}
+
+        # Auxiliary parameters: {"name": str, "values": pd.Series,
+        # "columns": list[str]}. They do not take part in the computation,
+        # DRDH_processing draws each of them on its own scale.
+        self.extra_parameters: list[dict[str, Any]] = []
 
     def create_DRDH_window(self) -> None:
         """
@@ -629,6 +642,7 @@ class DRDH_module:
                 "3 Group position",
                 "2 Group position",
                 "1 Group position",
+                ADD_PARAMETER,
                 ],
             state="readonly",
             width=20,
@@ -680,6 +694,7 @@ class DRDH_module:
                 "Not selected",
                 "Time",
                 "Reactivity",
+                "Boric acid concentration",
                 "12 Group position",
                 "11 Group position",
                 "10 Group position",
@@ -692,6 +707,7 @@ class DRDH_module:
                 "3 Group position",
                 "2 Group position",
                 "1 Group position",
+                ADD_PARAMETER,
             ]
 
             self.groups_mode_label.config(text="12 groups mode")
@@ -985,6 +1001,12 @@ class DRDH_module:
                     self.set_column_buttons_state(
                         removed_columns, disabled=False
                     )
+                if params[index].startswith(EXTRA_PREFIX):
+                    extra_name = params[index][len(EXTRA_PREFIX):]
+                    self.extra_parameters = [
+                        p for p in self.extra_parameters
+                        if p["name"] != extra_name
+                    ]
             del params[index]
             listbox.delete(index)
 
@@ -1234,6 +1256,10 @@ class DRDH_module:
             Messages.show("warning", "NO_COLUMNS")
             return
 
+        if selected_param == ADD_PARAMETER:
+            self.add_extra_parameter()
+            return
+
         rules = PARAMETER_RULES[selected_param]
 
         if rules["columns"] is not None:
@@ -1318,6 +1344,114 @@ class DRDH_module:
         # Columns just assigned to a parameter become locked: visually
         # and functionally unavailable until the parameter is cleared.
         self.set_column_buttons_state(self.selected_columns, disabled=True)
+        self.selected_columns.clear()
+
+    def ask_extra_parameter_name(self) -> Optional[str]:
+        """
+        Ask the user for the name of a new auxiliary parameter.
+
+        The name is used for the scale and for the legend, so it has to be
+        non-empty and unique. Returns None if the dialog is cancelled.
+        """
+        existing = {p["name"].casefold() for p in self.extra_parameters}
+        initial = ""
+
+        while True:
+            name = simpledialog.askstring(
+                "Add new parameter",
+                "Enter the parameter name\n"
+                "(it will be shown on its scale and in the legend):",
+                initialvalue=initial,
+                parent=self.root
+            )
+            if name is None:
+                return None
+
+            name = name.strip()
+            if not name:
+                messagebox.showwarning(
+                    "Add new parameter",
+                    "The name must not be empty.",
+                    parent=self.root
+                )
+                continue
+
+            if name.casefold() in existing:
+                messagebox.showwarning(
+                    "Add new parameter",
+                    f"The parameter '{name}' already exists. "
+                    "Enter another name.",
+                    parent=self.root
+                )
+                initial = name
+                continue
+
+            return name
+
+    def add_extra_parameter(self) -> None:
+        """
+        Add an auxiliary parameter from the currently selected columns.
+
+        The parameter is not used in the computation: it is only drawn in
+        DRDH_processing on its own scale. Any number of them can be added;
+        the combobox keeps "Add new parameter" selected for the next one.
+        """
+        columns = self.selected_columns.copy()
+        raw = self.df[columns]
+
+        # Numbers may use a decimal comma
+        text = raw.astype(str).apply(
+            lambda s: s.str.strip().str.replace(',', '.', regex=False)
+        )
+        data = text.apply(pd.to_numeric, errors='coerce')
+        blank = text.isin(['', 'nan', 'None'])
+
+        bad = data.isna() & ~blank
+        if bad.any().any():
+            col = next(c for c in columns if bad[c].any())
+            value = text[col][bad[col]].iloc[0]
+            Messages.show("error", "DATA_FORMAT", col=col, value=value)
+            self.clear_selected_column_buttons()
+            return
+
+        if data.isna().all().all():
+            messagebox.showerror(
+                "Add new parameter",
+                "The selected columns contain no numeric data.",
+                parent=self.root
+            )
+            self.clear_selected_column_buttons()
+            return
+
+        if len(columns) > 1:
+            proceed = messagebox.askyesno(
+                "Add new parameter",
+                f"{len(columns)} columns are selected. Their mean will be "
+                "shown as ONE parameter on a single scale.\n\nContinue?",
+                parent=self.root
+            )
+            if not proceed:
+                self.clear_selected_column_buttons()
+                return
+
+        name = self.ask_extra_parameter_name()
+        if name is None:
+            # Cancelled: the columns stay selected so it can be repeated
+            return
+
+        result: pd.Series = (
+            data.mean(axis=1) if len(columns) > 1 else data.iloc[:, 0]
+        )
+
+        key = f"{EXTRA_PREFIX}{name}"
+        self.extra_parameters.append(
+            {"name": name, "values": result, "columns": columns}
+        )
+        self.parameter_columns[key] = columns
+        self.NFME_parameters.append(key)
+
+        # Like for the other parameters, the columns become locked
+        self.set_column_buttons_state(columns, disabled=True)
         self.selected_columns.clear()
 
     def reset_required_parameter_label(self, parameter: str) -> None:
@@ -1550,6 +1684,7 @@ class DRDH_module:
             self.H3_position = None
             self.H2_position = None
             self.H1_position = None
+            self.extra_parameters = []
         if 'computed' in args:
             self.DRDC = None
             self.boric_acid_start = None
