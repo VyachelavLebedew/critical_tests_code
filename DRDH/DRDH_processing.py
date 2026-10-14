@@ -7,7 +7,7 @@ from openpyxl.utils import get_column_letter
 
 import tkinter as tk
 from tkinter import ttk
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 
 import matplotlib as mpl
 from matplotlib.backends.backend_tkagg import (
@@ -60,6 +60,29 @@ RANGE_HINTS = {
     'LEFT_2': "Line 2: drag with the left mouse button\nto select a range",
     'RIGHT_2': "Line 2: drag with the left mouse button\nto select a range",
 }
+
+
+# ---------------------------------------------------------------------
+# New constants of the plot additions. Move them to Settings if needed.
+# Already existing Settings values are used where they fit:
+#   PLOT['AXIS_SHIFT']           distance between the scales (points)
+#   PLOT['PLOT_LABEL_SIZE']      font size of scale labels and the legend
+#   PLOT_STYLE['GROUP_WIDTH']    line width of the auxiliary parameters
+#   CURSOR['CURSOR_LINEWIDTH']   width of the extended cursor lines
+#   ENTRY_WIDTH                  width of the name field (x2)
+# ---------------------------------------------------------------------
+
+# Colors of the lines of the auxiliary parameters (the scales themselves
+# keep the common color of the plot)
+EXTRA_COLORS = (
+    "tab:purple", "tab:brown", "tab:olive", "tab:cyan",
+    "tab:pink", "tab:gray", "darkgoldenrod", "teal",
+)
+
+# Legend
+LEGEND_LOCATION = "upper left"
+LEGEND_FRAME_ALPHA = 0.85
+LEGEND_MAX_ROWS = 6   # more entries are split into several columns
 
 
 class DRDH_processing:
@@ -117,6 +140,20 @@ class DRDH_processing:
         self.boric_acid_NFME = (
             series.values if series is not None else None
         )
+
+        # Auxiliary parameters from DRDH_module. They only appear on the
+        # plot (each on its own scale); "visible" and "name" are changed in
+        # Plot -> Edit entries.
+        self.extra_parameters: List[Dict[str, Any]] = []
+        for i, item in enumerate(
+            getattr(self.main_app, "extra_parameters", None) or []
+        ):
+            self.extra_parameters.append({
+                "name": item["name"],
+                "values": np.asarray(item["values"], dtype=float),
+                "visible": True,
+                "color": EXTRA_COLORS[i % len(EXTRA_COLORS)],
+            })
 
         # Indices needed by the "C from file" method of the DRDC:
         #   the very first click of the session and the last right click
@@ -179,6 +216,9 @@ class DRDH_processing:
         # Visibility flags, so that a new window repeats the old one exactly
         self.show_move_line: bool = False
         self.show_intersections: bool = False
+
+        # Legend of the plots (Plot -> Legend)
+        self.show_legend: bool = True
 
     @staticmethod
     def empty_state() -> Dict[str, Any]:
@@ -784,6 +824,20 @@ class DRDH_processing:
             label="Extended cursor",
             font=FONTS['DATA_FONT'],
             command=self.extended_cursor
+        )
+        save.add_command(
+            label="Edit entries",
+            font=FONTS['DATA_FONT'],
+            command=self.edit_entries
+        )
+        self.show_legend_var = tk.BooleanVar(
+            master=root_window, value=self.show_legend
+        )
+        save.add_checkbutton(
+            label="Legend",
+            font=FONTS['DATA_FONT'],
+            variable=self.show_legend_var,
+            command=self.toggle_legend
         )
         select_mode_menu = tk.Menu(self.menu_bar, tearoff=1)
         self.menu_bar.add_cascade(
@@ -2476,6 +2530,264 @@ class DRDH_processing:
             pady=GAPS['GAPS_Y']['PAD_Y_0_5']
         )
 
+    @staticmethod
+    def plot_axes(plot):
+        """
+        All axes of a plot window: reactivity, group positions and the
+        scales of the auxiliary parameters. The topmost axes is the one a
+        mouse event reports, so every one of them has to be accepted.
+        """
+        extra = [item["ax"] for item in plot.get("extra_axes", [])]
+        return (plot["ax1"], plot["ax2"], *extra)
+
+    def build_extra_axes(self, plot) -> None:
+        """
+        (Re)create the scales of the visible auxiliary parameters.
+
+        Every parameter gets its own y scale on the right of the group
+        position scale, named by the user, plus an entry in the legend.
+        Called when a window is created and after "Edit entries".
+        """
+        for item in plot["extra_axes"]:
+            try:
+                item["ax"].remove()
+            except Exception:
+                pass
+        plot["extra_axes"] = []
+        plot["cursor_hlines_extra"] = []
+
+        ax1 = plot["ax1"]
+        visible = [item for item in self.extra_parameters if item["visible"]]
+
+        for k, param in enumerate(visible):
+            color = param["color"]
+            values = param["values"]
+
+            ax = ax1.twinx()
+            ax.set_autoscale_on(False)
+
+            ax.spines["right"].set_position(
+                ("outward", PLOT['AXIS_SHIFT'] * (k + 1))
+            )
+            for side in ("left", "top", "bottom"):
+                ax.spines[side].set_visible(False)
+            ax.spines["right"].set_visible(True)
+            ax.set_ylabel(param["name"], fontsize=PLOT['PLOT_LABEL_SIZE'])
+
+            ax.plot(
+                self.times, values,
+                color=color,
+                linewidth=PLOT_STYLE['GROUP_WIDTH'],
+                label=param["name"]
+            )
+
+            finite = values[np.isfinite(values)]
+            if finite.size:
+                low, high = float(finite.min()), float(finite.max())
+                pad = 0.05 * (high - low)
+                if pad == 0:
+                    pad = abs(low) * 0.05 or 1.0
+                ax.set_ylim(low - pad, high + pad)
+
+            hline = ax.axhline(
+                finite[0] if finite.size else 0.0,
+                visible=False,
+                color=color, linestyle="--",
+                linewidth=CURSOR['CURSOR_LINEWIDTH']
+            )
+
+            plot["extra_axes"].append({"ax": ax, "param": param})
+            plot["cursor_hlines_extra"].append(
+                {"param": param, "line": hline}
+            )
+
+        self.update_legend(plot)
+
+    def update_legend(self, plot) -> None:
+        """
+        Redraw the legend of a plot window: reactivity, every group and
+        every visible auxiliary parameter. It sits on the topmost axes so
+        that no line is drawn over it. Does nothing but removing the old
+        one when the legend is switched off (Plot -> Legend).
+        """
+        for ax in self.plot_axes(plot):
+            legend = ax.get_legend()
+            if legend is not None:
+                legend.remove()
+
+        if self.show_legend:
+            handles, labels = [], []
+            for ax in self.plot_axes(plot):
+                ax_handles, ax_labels = ax.get_legend_handles_labels()
+                handles += ax_handles
+                labels += ax_labels
+
+            if handles:
+                owner = self.plot_axes(plot)[-1]
+                owner.legend(
+                    handles, labels,
+                    loc=LEGEND_LOCATION,
+                    ncol=-(-len(handles) // LEGEND_MAX_ROWS),
+                    fontsize=PLOT['PLOT_LABEL_SIZE'],
+                    frameon=True,
+                    framealpha=LEGEND_FRAME_ALPHA
+                )
+
+        plot["canvas"].draw_idle()
+
+    def toggle_legend(self) -> None:
+        """Show or hide the legend in every open plot window."""
+        self.show_legend = bool(self.show_legend_var.get())
+        for plot in self.plot_windows:
+            self.update_legend(plot)
+
+    def refresh_extra_axes(self) -> None:
+        """Rebuild the auxiliary scales in every open plot window."""
+        for plot in self.plot_windows:
+            self.build_extra_axes(plot)
+
+    def edit_entries(self) -> None:
+        """
+        Window to rename the auxiliary parameters and to switch them on
+        and off (check boxes). The plots are updated on "Apply".
+        """
+        if self.widget_alive(getattr(self, "edit_entries_window", None)):
+            self.edit_entries_window.lift()
+            self.edit_entries_window.focus_force()
+            return
+
+        window = tk.Toplevel(self.root)
+        window.title("Edit entries")
+        window.resizable(False, False)
+        window.config(bg=COLORS['PARAMETERS_BACKGROUND_COLOR'])
+        self.edit_entries_window = window
+
+        frame = tk.Frame(window, bg=COLORS['PARAMETERS_BACKGROUND_COLOR'])
+        frame.grid(
+            row=0, column=0,
+            padx=GAPS['GAPS_X']['PAD_X_10'],
+            pady=GAPS['GAPS_Y']['PAD_Y_10']
+        )
+
+        self.edit_entries_rows = []
+
+        if not self.extra_parameters:
+            tk.Label(
+                frame,
+                text="No additional parameters.\n"
+                     "Add them in the DRDH module:\n"
+                     "'Add new parameter'.",
+                font=FONTS['DATA_FONT'],
+                bg=COLORS['PARAMETERS_BACKGROUND_COLOR'],
+                justify="left"
+            ).grid(row=0, column=0, padx=10, pady=10)
+
+        else:
+            tk.Label(
+                frame, text="Show",
+                font=FONTS['DATA_FONT'],
+                bg=COLORS['PARAMETERS_BACKGROUND_COLOR']
+            ).grid(row=0, column=0, padx=GAPS['GAPS_X']['PAD_X_10'])
+            tk.Label(
+                frame, text="Name",
+                font=FONTS['DATA_FONT'],
+                bg=COLORS['PARAMETERS_BACKGROUND_COLOR']
+            ).grid(row=0, column=1, padx=GAPS['GAPS_X']['PAD_X_10'])
+
+            for row, param in enumerate(self.extra_parameters, start=1):
+                visible_var = tk.BooleanVar(
+                    master=window, value=param["visible"]
+                )
+                name_var = tk.StringVar(master=window, value=param["name"])
+
+                tk.Checkbutton(
+                    frame,
+                    variable=visible_var,
+                    bg=COLORS['PARAMETERS_BACKGROUND_COLOR'],
+                    activebackground=COLORS['PARAMETERS_BACKGROUND_COLOR']
+                ).grid(
+                    row=row, column=0,
+                    padx=GAPS['GAPS_X']['PAD_X_10'],
+                    pady=GAPS['GAPS_Y']['PAD_Y_5']
+                )
+                tk.Entry(
+                    frame,
+                    textvariable=name_var,
+                    width=ENTRY_WIDTH * 2,
+                    font=FONTS['DATA_FONT']
+                ).grid(
+                    row=row, column=1,
+                    padx=GAPS['GAPS_X']['PAD_X_10'],
+                    pady=GAPS['GAPS_Y']['PAD_Y_5']
+                )
+
+                self.edit_entries_rows.append(
+                    (param, visible_var, name_var)
+                )
+
+        button_frame = tk.Frame(
+            frame, bg=COLORS['PARAMETERS_BACKGROUND_COLOR']
+        )
+        button_frame.grid(
+            row=len(self.extra_parameters) + 1, column=0, columnspan=2,
+            pady=GAPS['GAPS_Y']['PAD_Y_10_20']
+        )
+
+        if self.extra_parameters:
+            TestButtons(
+                button_frame,
+                text="Apply",
+                command=self.apply_edit_entries
+            ).grid(row=0, column=0, padx=GAPS['GAPS_X']['PAD_X_5'])
+
+        MainButtons(
+            button_frame,
+            text="Cancel" if self.extra_parameters else "Close",
+            command=self.close_edit_entries
+        ).grid(row=0, column=1, padx=GAPS['GAPS_X']['PAD_X_5'])
+
+        window.protocol("WM_DELETE_WINDOW", self.close_edit_entries)
+        window.bind("<Escape>", lambda event: self.close_edit_entries())
+        if self.extra_parameters:
+            window.bind("<Return>", lambda event: self.apply_edit_entries())
+
+    def apply_edit_entries(self) -> None:
+        """Check the names, store names and flags, redraw the plots."""
+        names = []
+        for param, visible_var, name_var in self.edit_entries_rows:
+            name = name_var.get().strip()
+            if not name:
+                messagebox.showwarning(
+                    "Edit entries", "A name must not be empty.",
+                    parent=self.edit_entries_window
+                )
+                return
+            if name.casefold() in names:
+                messagebox.showwarning(
+                    "Edit entries",
+                    f"The name '{name}' is used twice.",
+                    parent=self.edit_entries_window
+                )
+                return
+            names.append(name.casefold())
+
+        for param, visible_var, name_var in self.edit_entries_rows:
+            param["name"] = name_var.get().strip()
+            param["visible"] = bool(visible_var.get())
+
+        self.refresh_extra_axes()
+        self.close_edit_entries()
+
+    def close_edit_entries(self) -> None:
+        """Close the "Edit entries" window."""
+        window = getattr(self, "edit_entries_window", None)
+        if self.widget_alive(window):
+            window.destroy()
+
+        for attr in ("edit_entries_window", "edit_entries_rows"):
+            if hasattr(self, attr):
+                delattr(self, attr)
+
     def extended_cursor(self):
         """
         Select the extended cursor mode on all open plots.
@@ -2507,6 +2819,8 @@ class DRDH_processing:
 
                 for line in plot["cursor_hlines_groups"]:
                     line.set_visible(False)
+                for item in plot["cursor_hlines_extra"]:
+                    item["line"].set_visible(False)
                 plot["cursor_text"].set_visible(False)
 
                 plot["canvas"].draw_idle()
@@ -2525,7 +2839,7 @@ class DRDH_processing:
         if plot["toolbar"].mode != '':
             return
 
-        if event.inaxes not in (plot["ax1"], plot["ax2"]):
+        if event.inaxes not in self.plot_axes(plot):
             return
 
         if event.xdata is None:
@@ -2553,11 +2867,24 @@ class DRDH_processing:
             line.set_ydata([val, val])
             line.set_visible(True)
 
+        for item in plot["cursor_hlines_extra"]:
+            val = float(item["param"]["values"][nearest_index])
+            if np.isfinite(val):
+                item["line"].set_ydata([val, val])
+                item["line"].set_visible(True)
+            else:
+                item["line"].set_visible(False)
+
         textstr = f"{time_val.strftime('%H:%M:%S')}\nR: {R:.{self.DECIMAL_REACT}f}"
 
         for i, name in enumerate(self.Group_names):
             val = self.Groups[i][nearest_index]
             textstr += f"\n{name}: {val:.{self.DECIMAL_GROUP}f}"
+
+        for item in plot["cursor_hlines_extra"]:
+            val = float(item["param"]["values"][nearest_index])
+            shown = f"{val:.6g}" if np.isfinite(val) else "n/a"
+            textstr += f"\n{item['param']['name']}: {shown}"
 
         plot["cursor_text"].set_text(textstr)
         plot["cursor_text"].set_position((time_val, R))
@@ -2580,6 +2907,8 @@ class DRDH_processing:
         Args:
             window (tk.Widget): DRDH frame to destroy.
         """
+        self.close_edit_entries()
+
         root_window = self.root.winfo_toplevel()
         root_window.config(menu=None)
         self.root.config(menu=None)
@@ -3545,8 +3874,14 @@ class DRDH_processing:
             "finished_lines": [],
             "green_points": [],
             "move_line": None,
-            "cursor_cid": None
+            "cursor_cid": None,
+
+            # Scales of the auxiliary parameters (see build_extra_axes)
+            "extra_axes": [],
+            "cursor_hlines_extra": []
         }
+
+        self.build_extra_axes(plot_obj)
 
         canvas.mpl_connect(
             "button_press_event",
@@ -3830,7 +4165,7 @@ class DRDH_processing:
         The Y axes remain unchanged.
         """
 
-        if event.inaxes not in (plot["ax1"], plot["ax2"]):
+        if event.inaxes not in self.plot_axes(plot):
             return
 
         # Do not interfere with an explicitly selected toolbar mode.
@@ -3891,7 +4226,7 @@ class DRDH_processing:
         if plot["toolbar"].mode != '':
             return
 
-        if event.inaxes not in (plot["ax1"], plot["ax2"]):
+        if event.inaxes not in self.plot_axes(plot):
             return
 
         # Line 1 is inherited from the previous cycle: the user has to
