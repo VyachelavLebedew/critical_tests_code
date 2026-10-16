@@ -1303,16 +1303,39 @@ class DRDH_processing:
             if "idx1" in p:
                 p["u"] = self.get_program_coordinate(p["idx1"], p["idx2"])
 
+    def experiment_group_positions(self, p) -> List[Optional[float]]:
+        """
+        Positions of ALL the groups at a measured step, aligned with
+        Group_names: the mean of the start and of the end of the step, the
+        same way the abscissa of the point is taken. A group that stood
+        still simply keeps its position.
+        """
+        if "idx1" in p and "idx2" in p:
+            return [
+                float((g[p["idx1"]] + g[p["idx2"]]) / 2.0)
+                for g in self.Groups
+            ]
+
+        groups = p.get("groups") or {}
+
+        return [groups.get(name) for name in self.Group_names]
+
     def save_drdh_data(self):
         """
         Save the points of the DRDH plot as a tab separated text file, so
         that the curve can be replotted in any other program.
 
         All the data share ONE position column (the common axis of the
-        plot), sorted ascending. Every row holds what lies at that position:
-        the measured DRDH with its error, the album DRDH and, after
-        "Interpolate", the album DRDH interpolated at the measured step. A
-        cell is blank where the curve has no point at that position.
+        plot), sorted ascending. Right after it come the positions of every
+        group - the real ones, which do not depend on the overlap - so that
+        the handover between the groups can be plotted:
+          - H.. mean position - the groups at a measured step (the mean of
+            the start and the end of the step);
+          - Album H.. position - the groups of the album table row (for the
+            interpolated value: interpolated the same way).
+        Then follow the measured DRDH with its error, the album DRDH and,
+        after "Interpolate", the album DRDH interpolated at the measured
+        step. A cell is blank where there is nothing at that position.
         """
         self.refresh_drdh_abscissas()
         points = [p for p in self.drdh_points if p["u"] is not None]
@@ -1339,12 +1362,16 @@ class DRDH_processing:
             return
 
         factor = DRDH_ERROR['SIGMA_FACTOR']
+        album_groups = (
+            sorted(album_points[0]["positions"]) if album_points else []
+        )
 
         # One row per measured step; the interpolated album value belongs
         # to the same row, because it is taken at that very position.
         if interpolate:
             interpolated = self.interpolate_album_values(
-                album_points, [p["u"] for p in points]
+                album_points, [p["u"] for p in points],
+                with_positions=True
             )
         else:
             interpolated = [None] * len(points)
@@ -1352,8 +1379,13 @@ class DRDH_processing:
         rows = []
         by_position = {}
 
-        for p, value in zip(points, interpolated):
-            row = {"u": p["u"], "exp": p, "album": None, "interp": value}
+        for p, item in zip(points, interpolated):
+            row = {
+                "u": p["u"], "exp": p,
+                "album": None,
+                "interp": item[0] if item else None,
+                "album_pos": item[1] if item else None
+            }
             rows.append(row)
             by_position.setdefault(round(p["u"], 6), row)
 
@@ -1364,11 +1396,13 @@ class DRDH_processing:
 
             if row is not None and row["album"] is None:
                 row["album"] = a_p["DRDH"]
+                row["album_pos"] = a_p["positions"]
                 continue
 
             row = {
                 "u": a_p["u"], "exp": None,
-                "album": a_p["DRDH"], "interp": None
+                "album": a_p["DRDH"], "interp": None,
+                "album_pos": a_p["positions"]
             }
             rows.append(row)
             by_position.setdefault(round(a_p["u"], 6), row)
@@ -1378,8 +1412,13 @@ class DRDH_processing:
         def fmt(value, decimals):
             return "" if value is None else f"{value:.{decimals}f}"
 
-        header = [
-            "Position, %",
+        header = ["Position, %"]
+        header += [f"{name} mean position, %" for name in self.Group_names]
+        header += [
+            f"Album {self.Group_names[gi]} position, %"
+            for gi in album_groups
+        ]
+        header += [
             "DRDH, pcm/cm",
             f"+/-{factor:g}sigma, pcm/cm",
             "Reference group"
@@ -1397,6 +1436,20 @@ class DRDH_processing:
             for r in rows:
                 p = r["exp"]
                 line = [fmt(r["u"], self.DECIMAL_GROUP)]
+
+                if p is not None:
+                    line += [
+                        fmt(v, self.DECIMAL_GROUP)
+                        for v in self.experiment_group_positions(p)
+                    ]
+                else:
+                    line += [""] * len(self.Group_names)
+
+                album_pos = r["album_pos"] or {}
+                line += [
+                    fmt(album_pos.get(gi), self.DECIMAL_GROUP)
+                    for gi in album_groups
+                ]
 
                 if p is not None:
                     line += [
@@ -1590,7 +1643,8 @@ class DRDH_processing:
         self.draw_drdh_plot()
 
     @staticmethod
-    def interpolate_album_values(album_points, targets):
+    def interpolate_album_values(album_points, targets,
+                                 with_positions=False):
         """
         The album DRDH at the given positions, by linear interpolation
         between the neighbouring calculated points. Returns a list aligned
@@ -1598,24 +1652,41 @@ class DRDH_processing:
         curve or in a break of it (the same break as album_line draws: the
         reference group changes AND the abscissa jumps), since there is no
         honest value to interpolate there.
+
+        With with_positions every item is (DRDH, {group index: position})
+        - the positions of the album groups at that point, interpolated in
+        the same way.
         """
+        empty = [None] * len(targets)
+
         if len(album_points) < 2:
-            return [None] * len(targets)
+            return empty
 
         pts = sorted(album_points, key=lambda p: p["u"])
         xs = np.array([p["u"] for p in pts], dtype=float)
-        ys = np.array([p["DRDH"] for p in pts], dtype=float)
         refs = [p["ref"] for p in pts]
+
+        # the series to interpolate: the DRDH and, if asked, every group
+        gis = sorted(pts[0]["positions"]) if with_positions else []
+        columns = [np.array([p["DRDH"] for p in pts], dtype=float)]
+        columns += [
+            np.array([p["positions"][gi] for p in pts], dtype=float)
+            for gi in gis
+        ]
 
         # Points with the same abscissa (e.g. at a handover) are averaged
         ux, first, inverse = np.unique(
             xs, return_index=True, return_inverse=True
         )
-        uy = np.bincount(inverse, weights=ys) / np.bincount(inverse)
+        inverse = inverse.ravel()
+        counts = np.bincount(inverse)
+        merged = [
+            np.bincount(inverse, weights=c) / counts for c in columns
+        ]
         uref = [refs[i] for i in first]
 
         if len(ux) < 2:
-            return [None] * len(targets)
+            return empty
 
         gaps = np.diff(ux)
         limit = 3.0 * float(np.median(gaps))
@@ -1630,21 +1701,26 @@ class DRDH_processing:
             j = int(np.searchsorted(ux, t - eps))
 
             if j >= len(ux):
-                result.append(float(uy[-1]))
-                continue
+                lo = hi = len(ux) - 1
+                k = 0.0
+            elif j == 0 or abs(ux[j] - t) <= eps:
+                lo = hi = j
+                k = 0.0
+            else:
+                lo, hi = j - 1, j
 
-            if j == 0 or abs(ux[j] - t) <= eps:
-                result.append(float(uy[j]))
-                continue
+                if uref[lo] != uref[hi] and gaps[lo] > limit:
+                    result.append(None)
+                    continue
 
-            lo, hi = j - 1, j
+                k = (t - ux[lo]) / (ux[hi] - ux[lo])
 
-            if uref[lo] != uref[hi] and gaps[lo] > limit:
-                result.append(None)
-                continue
+            values = [float(c[lo] + (c[hi] - c[lo]) * k) for c in merged]
 
-            k = (t - ux[lo]) / (ux[hi] - ux[lo])
-            result.append(float(uy[lo] + (uy[hi] - uy[lo]) * k))
+            if with_positions:
+                result.append((values[0], dict(zip(gis, values[1:]))))
+            else:
+                result.append(values[0])
 
         return result
 
@@ -1968,7 +2044,9 @@ class DRDH_processing:
             points.append({
                 "u": float(u),
                 "DRDH": float(drdh),
-                "ref": ref
+                "ref": ref,
+                # all the groups of the table row, for Save data
+                "positions": {gi: float(v) for gi, v in current.items()}
             })
 
         # The rows of the table are the trajectory of the calculation: keep
