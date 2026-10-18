@@ -90,6 +90,65 @@ def itc_error(delta_R_percent, delta_T):
     )
 
 
+def itc_slope_uncertainty(reactivity, temperature, start_index,
+                          finish_index, beta, methodical_rel=0.05,
+                          coverage=2.0):
+    """
+    Refined 2-sigma of Technique 2 (ITC as the slope of R vs T), evaluated
+    from all points of the interval instead of the two clicked points.
+
+    Two independent components, combined in quadrature:
+
+    * statistical - the scatter of the points about the fitted line, i.e.
+      the standard error of the least-squares slope
+
+          s       = sqrt( sum (R_i - R_fit_i)^2 / (n - 2) )
+          sigma_b = s / sqrt( sum (T_i - T_mean)^2 )
+
+      sum (T_i - T_mean)^2 = n * var(T), so sigma_b falls as 1/sqrt(n) and
+      as 1/dT: this is the part that many points reduce;
+    * methodical - the reactimeter (delayed-neutron data, beta_eff), the
+      same 5 % of ITC as in itc_error. It scales the whole reactivity
+      curve, so it does not depend on the number of points.
+
+        U = sqrt( (methodical_rel * ITC)^2
+                  + (coverage * sigma_b * beta * 1000)^2 )
+
+    Reactivity is in Beff, temperature in degC, beta in percent; the
+    result is in pcm/degC. The slice is the one of itc_linear_fit, so the
+    slope equals the Technique 2 ITC.
+
+    Returns a dict (itc, n, u_stat, u_meth, u_total), or None if the
+    interval has fewer than 3 points or no temperature change.
+    """
+    r = np.asarray(reactivity[start_index:finish_index], dtype=float)
+    t = np.asarray(temperature[start_index:finish_index], dtype=float)
+    ok = np.isfinite(r) & np.isfinite(t)
+    r, t = r[ok], t[ok]
+    n = len(t)
+    if n < 3:
+        return None
+    t_c = t - t.mean()
+    s_tt = float(t_c @ t_c)
+    if s_tt <= 0:
+        return None
+    slope = float(t_c @ (r - r.mean())) / s_tt
+    residuals = (r - r.mean()) - slope * t_c
+    s = float(np.sqrt(residuals @ residuals / (n - 2)))
+    sigma_slope = s / np.sqrt(s_tt)
+
+    itc = slope * beta * 1000
+    u_stat = coverage * sigma_slope * beta * 1000
+    u_meth = methodical_rel * abs(itc)
+    return {
+        "itc": itc,
+        "n": n,
+        "u_stat": u_stat,
+        "u_meth": u_meth,
+        "u_total": float(np.hypot(u_stat, u_meth)),
+    }
+
+
 def drdy_error(itc_err, dtc, boric_acid):
     """DRDY error, or None when boric acid is unknown."""
     if boric_acid is None:
@@ -133,8 +192,136 @@ def weighted_mean(values, sigmas):
     return mean, sigma_mean
 
 
+def local_rates(time_s, values, indices, window):
+    """
+    Local rate of change of `values`, per hour, at each of `indices`: the
+    slope of a least-squares line over the points with |t - t_i| <=
+    window / 2. It is the rule of PCR_processing.heating_rate (with its
+    fallback to +/-3 points), applied at many points at once. `time_s` is
+    in seconds and increases along the record.
+    """
+    t = np.asarray(time_s, dtype=float)
+    y = np.asarray(values, dtype=float)
+    idx = np.asarray(indices, dtype=int)
+    half = window / 2.0
+    # candidate range from a sorted search, the exact rule applied inside
+    lo = np.searchsorted(t, t[idx] - half, side="left") - 3
+    hi = np.searchsorted(t, t[idx] + half, side="right") + 3
+    rates = np.full(len(idx), np.nan)
+    for k, i in enumerate(idx):
+        a, b = max(int(lo[k]), 0), min(int(hi[k]), len(t))
+        inside = np.abs(t[a:b] - t[i]) <= half
+        ts, ys = t[a:b][inside], y[a:b][inside]
+        if len(ts) < 3:
+            ts, ys = t[max(0, i - 3):i + 4], y[max(0, i - 3):i + 4]
+        t_c = ts - ts.mean()
+        s_tt = float(t_c @ t_c)
+        if s_tt > 0:
+            rates[k] = float(t_c @ (ys - ys.mean())) / s_tt * 3600.0
+    return rates
+
+
+def slope_fit(x, y):
+    """
+    Least-squares line y = b * x + c over the finite points, with the
+    standard error of the slope:
+
+        se = s / sqrt( sum (x_i - x_mean)^2 ),  s = sqrt( sum e_i^2 / (n - 2) )
+
+    Returns (b, se, n), or None for fewer than 3 points or no spread of x.
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    ok = np.isfinite(x) & np.isfinite(y)
+    x, y = x[ok], y[ok]
+    n = len(x)
+    if n < 3:
+        return None
+    x_c = x - x.mean()
+    s_xx = float(x_c @ x_c)
+    if s_xx <= 0:
+        return None
+    b = float(x_c @ (y - y.mean())) / s_xx
+    e = (y - y.mean()) - b * x_c
+    se = float(np.sqrt(e @ e / (n - 2) / s_xx))
+    return b, se, n
+
+
+def pcr_slope(rho_pcm, temperature, pressure, v_T, v_RCPS, MC, alpha_T,
+              alpha_P, sigma_rho_rel, sigma_alpha_T, sigma_alpha_P,
+              sigma_MC_rel, coverage=2.0):
+    """
+    PCR by the slope method: the power and the power reactivity effect are
+    taken at every point of the rise, and PCR is the slope of dR_N(N).
+
+        N(t)    = MC * (v_T(t) - v_RCPS)
+        dR_N(t) = -[ R(t0) - R(t) + ITC * (T(t) - T(t0))
+                     + PrCR * (P(t) - P(t0)) ]
+        PCR     = slope of the least-squares line dR_N = PCR * N + c
+
+    The arrays run from t0 to t1, v_T is the local heating rate at every
+    point (degC/h). The line has a free term, so a constant error of
+    v_RCPS or of the values at t0 moves it without changing the slope.
+
+    Uncertainty, pcm/MWt, at the 95 % level of the methodology (its 10 %
+    for MC and heating rates are 95 % intervals) - two independent parts:
+
+    * statistical - the scatter of the points about the line: `coverage`
+      (2) standard errors of the slope (slope_fit). It replaces the point terms
+      of the two-point method - dT, dP and the heating rates at t1 and in
+      the base - and falls as the number of points grows. Neighbouring v_T
+      share their window, yet their errors do not add up in the slope of
+      dR_N(N) (the noise of a fitted rate averages out over a window), so
+      the plain formula holds - checked by simulation;
+    * methodical - errors common to all points, acting through the slopes
+      b_R, b_T, b_P of R, T and P against N: reactimeter
+      sigma_rho_rel * b_R, ITC sigma_alpha_T * b_T, PrCR
+      sigma_alpha_P * b_P, and heat capacity sigma_MC_rel * PCR (N is
+      proportional to MC). It does not depend on the number of points.
+
+    Returns a dict (pcr, n, sigma_stat, sigma_meth, sigma, delta,
+    delta_stat, delta_meth; deltas relative), or None.
+    """
+    rho = np.asarray(rho_pcm, dtype=float)
+    T = np.asarray(temperature, dtype=float)
+    P = np.asarray(pressure, dtype=float)
+    N = MC * (np.asarray(v_T, dtype=float) - v_RCPS)
+    dR_N = (rho - rho[0]) - alpha_T * (T - T[0]) - alpha_P * (P - P[0])
+
+    ok = (np.isfinite(N) & np.isfinite(dR_N) & np.isfinite(rho)
+          & np.isfinite(T) & np.isfinite(P))
+    fit = slope_fit(N[ok], dR_N[ok])
+    if fit is None:
+        return None
+    pcr, se, n = fit
+    sigma_stat = coverage * se
+    if pcr == 0:
+        return None
+    b_R = slope_fit(N[ok], rho[ok])[0]
+    b_T = slope_fit(N[ok], T[ok])[0]
+    b_P = slope_fit(N[ok], P[ok])[0]
+
+    sigma_meth = float(np.sqrt(
+        (sigma_rho_rel * b_R) ** 2
+        + (sigma_alpha_T * b_T) ** 2
+        + (sigma_alpha_P * b_P) ** 2
+        + (sigma_MC_rel * pcr) ** 2
+    ))
+    sigma = float(np.hypot(sigma_stat, sigma_meth))
+    return {
+        "pcr": pcr,
+        "n": n,
+        "sigma_stat": sigma_stat,
+        "sigma_meth": sigma_meth,
+        "sigma": sigma,
+        "delta": sigma / abs(pcr),
+        "delta_stat": sigma_stat / abs(pcr),
+        "delta_meth": sigma_meth / abs(pcr),
+    }
+
+
 # ====================================================================== #
-#  Symmetry - azimuthal asymmetry                                       #
+#  Symmetry - azimuthal asymmetry                                        #
 # ====================================================================== #
 def d_rho(rho_init, rho_fin):
     """CR worth = |rho_init - rho_fin|, or None if a value is missing."""

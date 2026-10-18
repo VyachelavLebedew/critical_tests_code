@@ -54,6 +54,12 @@ class PCR_processing:
 
     with alpha_T = ITC and alpha_P = PrCR entered in PCR_module. The final
     PCR is the inverse-variance weighted mean of the two procedures.
+
+    Settings -> Slope method: N(t) and dR_N(t) are taken at every point
+    from t0 to t1 (v_T(t) by the same window as v_T(t1)), and PCR is the
+    slope of the least-squares line dR_N(N) (Formulas.pcr_slope). Both
+    methods are computed at Proceed; the option chooses which one the
+    table and the weighted mean use.
     """
 
     def __init__(self, root: tk.Widget, main_app: Any):
@@ -119,6 +125,13 @@ class PCR_processing:
 
         # Per-procedure results, keyed by the steam mode
         self.results: Dict[str, Dict[str, Any]] = {}
+
+        # Settings -> Slope method. The choice is kept in PCR_module, so it
+        # survives BACK -> START.
+        self.slope_method_var = tk.BooleanVar(
+            master=self.root,
+            value=getattr(self.main_app, "slope_method", False)
+        )
 
         # Selection state of the current procedure
         self.reset_selection()
@@ -201,7 +214,10 @@ class PCR_processing:
     #  Menu                                                              #
     # ------------------------------------------------------------------ #
     def create_menu(self) -> None:
-        """Menu bar: Options (switch mode, load file), Plot, Save, INFO."""
+        """
+        Menu bar: Options (switch mode, load file), Plot, Settings
+        (computed parameters, slope method), Units, Decimal, Save, INFO.
+        """
         self.menu_bar = tk.Menu(self.root.winfo_toplevel())
         self.root.winfo_toplevel().config(menu=self.menu_bar)
 
@@ -236,14 +252,21 @@ class PCR_processing:
             command=self.toggle_legend
         )
 
-        parameters_menu = tk.Menu(self.menu_bar, tearoff=0)
-        self.menu_bar.add_cascade(
-            label="Computed parameters", menu=parameters_menu
-        )
-        parameters_menu.add_command(
-            label="Edit parameters",
+        settings = tk.Menu(self.menu_bar, tearoff=0)
+        self.menu_bar.add_cascade(label="Settings", menu=settings)
+        settings.add_command(
+            label="Computed parameters",
             font=FONTS['DATA_FONT'],
             command=self.open_experiment_parameters
+        )
+        settings.add_separator()
+        settings.add_checkbutton(
+            label="Slope method (ΔR_N vs N)",
+            font=FONTS['DATA_FONT'],
+            variable=self.slope_method_var,
+            onvalue=True,
+            offvalue=False,
+            command=self.toggle_slope_method
         )
 
         units = tk.Menu(self.menu_bar, tearoff=0)
@@ -293,6 +316,26 @@ class PCR_processing:
             label="INFO", font=FONTS['DATA_FONT'],
             command=lambda: show_info(self.root, "PCR/info_processing.txt")
         )
+
+    def toggle_slope_method(self) -> None:
+        """
+        Settings -> Slope method (ΔR_N vs N).
+
+        Ticked: the table and the weighted mean use PCR from the slope of
+        ΔR_N(N) over all points from t0 to t1. Unticked: the two-point
+        result. Both are computed at Proceed, so the switch applies at
+        once to every procedure already measured.
+        """
+        self.main_app.slope_method = self.slope_method_var.get()
+        self.compute_mean()
+        self.refresh_table()
+
+    def _active(self, res):
+        """PCR and its absolute uncertainty of a procedure, by Settings."""
+        slope = res.get("_slope")
+        if self.slope_method_var.get() and slope is not None:
+            return slope["pcr"], slope["sigma"]
+        return res["_alpha_N"], res["_sigma_abs"]
 
     # ------------------------------------------------------------------ #
     #  Labels: mode indicator and per-procedure status                   #
@@ -482,7 +525,7 @@ class PCR_processing:
         entry.bind("<Return>", lambda e: save())
 
     # ------------------------------------------------------------------ #
-    #  Computed parameters (menu: Computed parameters -> Edit parameters)#
+    #  Computed parameters (menu: Settings -> Computed parameters)       #
     # ------------------------------------------------------------------ #
     def open_experiment_parameters(self) -> None:
         """
@@ -515,7 +558,7 @@ class PCR_processing:
         parameters = [
             ("ITC (α_T), pcm/°C:", "alpha_T", self.alpha_T),
             ("PrCR (α_P), pcm/MPa:", "alpha_P", self.alpha_P),
-            ("MC, MJ/°C:", "MC", self.MC),
+            ("MC, MWt/(°C/h):", "MC", self.MC),
             ("β_eff, %:", "beta", self.beta),
             ("σ(DRDY), %:", "sigma_DRDY", self.sigma_DRDY),
             ("PCR reference, pcm/MWt:", "PCR_reference", self.PCR_reference),
@@ -783,6 +826,17 @@ class PCR_processing:
                 values=[label, "", "", ""]
             )
 
+        # Rows shown only with Settings -> Slope method, after δ(PCR_exp)
+        self.slope_row_labels = [
+            ("n_fit", "Points in fit, n"),
+            ("delta_stat", "δ stat., %"),
+            ("delta_meth", "δ meth., %"),
+        ]
+        self.slope_labels = {
+            "PCR_exp": "PCR (slope), pcm/MWt",
+            "delta": "δ(PCR), %",
+        }
+
         self.tree.pack(fill=tk.BOTH, expand=True)
         self.tree.bind("<Button-1>", self.on_tree_click)
         self.tree.bind("<Control-c>", self.copy_from_entry)
@@ -872,6 +926,13 @@ class PCR_processing:
         react_raw = {"R0": "_R0_pcm", "R1": "_R1_pcm", "dR_N": "_dR_N_pcm"}
         r = self.DECIMAL_REACT
 
+        slope_on = self.slope_method_var.get()
+        self._show_slope_rows(slope_on)
+        if slope_on:
+            react_labels.update(self.slope_labels)
+            for key, label in self.slope_row_labels:
+                self.tree.item(key, values=[label, "", "", ""])
+
         # clear data columns; reactivity rows get the current-unit label
         for key, label in self.row_labels:
             shown = react_labels.get(key, label)
@@ -890,6 +951,14 @@ class PCR_processing:
                     vals[col] = res[key]
                 self.tree.item(key, values=vals)
 
+            # Slope method: its PCR, δ and deviation replace the two-point
+            # ones, and the extra rows show n and the two parts of δ
+            if slope_on:
+                for key, text in self._slope_cells(res).items():
+                    vals = list(self.tree.item(key, "values"))
+                    vals[col] = text
+                    self.tree.item(key, values=vals)
+
         # Mean column, filled by compute_mean()
         mean = getattr(self, "mean_result", None)
         if mean:
@@ -899,6 +968,35 @@ class PCR_processing:
                     vals = list(self.tree.item(key, "values"))
                     vals[mcol] = mean[key]
                     self.tree.item(key, values=vals)
+
+    def _show_slope_rows(self, show: bool) -> None:
+        """Insert the slope-method rows after δ(PCR_exp), or remove them."""
+        for k, (key, label) in enumerate(self.slope_row_labels):
+            if show and not self.tree.exists(key):
+                position = self.tree.index("delta") + 1 + k
+                self.tree.insert(
+                    "", position, iid=key, values=[label, "", "", ""]
+                )
+            elif not show and self.tree.exists(key):
+                self.tree.delete(key)
+
+    def _slope_cells(self, res) -> Dict[str, str]:
+        """Table cells of the slope method for one procedure."""
+        slope = res.get("_slope")
+        if slope is None:
+            return {"n_fit": "n/a"}
+        cells = {
+            "PCR_exp": f"{slope['pcr']:.3f}",
+            "delta": f"{100 * slope['delta']:.1f}",
+            "n_fit": f"{slope['n']}",
+            "delta_stat": f"{100 * slope['delta_stat']:.2f}",
+            "delta_meth": f"{100 * slope['delta_meth']:.1f}",
+            "deviation": "-",
+        }
+        if self.PCR_reference is not None and self.PCR_reference != 0:
+            dev = (slope["pcr"] - self.PCR_reference) / abs(self.PCR_reference)
+            cells["deviation"] = f"{100 * dev:.1f}"
+        return cells
 
     # ------------------------------------------------------------------ #
     #  Plot                                                              #
@@ -1375,7 +1473,7 @@ class PCR_processing:
         d_drho_N = s_drho_N / abs(drho_N) if drho_N else 0.0
 
         s_N = np.sqrt(
-            (v_T1 + v_G)**2 * self.sigma_MC_rel**2
+            (v_T1**2 + v_G**2) * (self.sigma_MC_rel * self.MC)**2
             + self.MC**2 * (
                 (self.sigma_v_rel * v_T1)**2
                 + (self.sigma_v_rel * v_G)**2
@@ -1384,6 +1482,9 @@ class PCR_processing:
         d_N = s_N / abs(N1)
 
         delta_alpha = np.sqrt(d_drho_N**2 + d_N**2)   # relative
+
+        # ---- slope method (Settings), over all points t0..t1 ----
+        slope = self.slope_result(i0, i1, v_G)
 
         # ---- store, formatted ----
         r = self.DECIMAL_REACT
@@ -1414,6 +1515,8 @@ class PCR_processing:
             # raw values for the weighted mean
             "_alpha_N": alpha_N,
             "_sigma_abs": abs(alpha_N) * delta_alpha,
+            # slope method result (dict) or None
+            "_slope": slope,
         }
 
         # per-procedure deviation from the reference, if given
@@ -1427,23 +1530,54 @@ class PCR_processing:
         self.update_status_labels()
         self.update_hint()
 
+    def slope_result(self, i0, i1, v_G):
+        """
+        Slope method for the current clicks: v_T at every point from t0 to
+        t1 by the same `base` window as v_T(t1), then Formulas.pcr_slope.
+        Returns its dict, or None if the line cannot be fitted.
+        """
+        lo, hi = sorted((i0, i1))
+        idx = np.arange(lo, hi + 1)
+        tsec = np.asarray(self.Time, dtype=float) * 86400.0
+        temperature = np.asarray(self.Temperature, dtype=float)
+        v_T = Formulas.local_rates(tsec, temperature, idx, self.base)
+        rho = Formulas.reactivity_pcm(
+            np.asarray(self.Reactivity, dtype=float)[idx], self.beta
+        )
+        # sigma(alpha_P) as in the two-point method
+        sigma_alpha_P = (
+            0.0 if self.sigma_DRDY is None
+            else abs(self.sigma_DRDY / 100.0 * self.alpha_P)
+        )
+        return Formulas.pcr_slope(
+            rho, temperature[idx],
+            np.asarray(self.Pressure, dtype=float)[idx],
+            v_T, v_G, self.MC, self.alpha_T, self.alpha_P,
+            self.sigma_rho_rel, self.sigma_alpha_T, sigma_alpha_P,
+            self.sigma_MC_rel
+        )
+
     def compute_mean(self):
-        """Inverse-variance weighted mean of the two procedures."""
+        """
+        Inverse-variance weighted mean of the two procedures, of the
+        two-point or the slope results (Settings -> Slope method).
+        """
         both = [
             r for r in self.results.values()
-            if r.get("_sigma_abs", 0) > 0
+            if self._active(r)[1] > 0
         ]
         if len(both) < 2:
             # with a single procedure the mean equals it
             if len(self.results) == 1:
                 only = next(iter(self.results.values()))
-                self.mean_result = {"PCR_exp": only["PCR_exp"]}
-                self._apply_mean_reference(only["_alpha_N"])
+                alpha_only = self._active(only)[0]
+                self.mean_result = {"PCR_exp": f"{alpha_only:.3f}"}
+                self._apply_mean_reference(alpha_only)
             return
 
         alpha_mean, _ = Formulas.weighted_mean(
-            [r["_alpha_N"] for r in both],
-            [r["_sigma_abs"] for r in both]
+            [self._active(r)[0] for r in both],
+            [self._active(r)[1] for r in both]
         )
 
         self.mean_result = {"PCR_exp": f"{alpha_mean:.3f}"}
@@ -1643,9 +1777,9 @@ class PCR_processing:
     #  Export                                                            #
     # ------------------------------------------------------------------ #
     def get_table_data(self):
-        """Rows of the results table as plain lists."""
+        """Rows of the results table as plain lists, as shown."""
         data = []
-        for key, _ in self.row_labels:
+        for key in self.tree.get_children():
             data.append(list(self.tree.item(key, "values")))
         return data
 

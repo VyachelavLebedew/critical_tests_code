@@ -79,6 +79,9 @@ class ITC_processing:
         techniques 1-3: compute the ITC ect.
         DRDY: Compute DRDY.
         error: Compute the error values for ITC and DRDY.
+        toggle_refined_uncertainty: Settings option, switch 2σ between the
+        standard formula and the refined Technique 2 value.
+        select_uncertainty: Set the 2σ values shown in the table.
         update_labels: Refresh label values after Decimal or unit changes.
     """
 
@@ -145,6 +148,14 @@ class ITC_processing:
         self.min_points: int = ITC_COMPUTATION_VALUES['MIN_POINTS']
         self.points_amount: int = ITC_COMPUTATION_VALUES['POINTS_AMOUNT']
         self.step_points: int = ITC_COMPUTATION_VALUES['STEP_POINTS']
+
+        # Settings -> Refined uncertainty (Technique 2). The choice is kept
+        # in ITC_module, so it survives BACK -> START.
+        self.refined_uncertainty_var = tk.BooleanVar(
+            master=self.root,
+            value=getattr(self.main_app, "refined_uncertainty", False)
+        )
+        self.refined: Optional[Dict[str, float]] = None
 
     def create_ITC_processing_window(self) -> None:
         """Create the main ITC processing window layout and initialize UI."""
@@ -379,6 +390,7 @@ class ITC_processing:
         - Info
         - Save results
         - Plot tools
+        - Settings: computed parameters, refined uncertainty
         """
         root_window = self.root.winfo_toplevel()
         root_window.config(menu=None)
@@ -446,21 +458,47 @@ class ITC_processing:
             font=FONTS['DATA_FONT'],
             command=self.extended_cursor
         )
-        computed_parameters = tk.Menu(
-            self.menu_bar,
-            tearoff=1
-        )
+        settings = tk.Menu(self.menu_bar, tearoff=1)
+        self.menu_bar.add_cascade(label="Settings", menu=settings)
 
-        self.menu_bar.add_cascade(
+        settings.add_command(
             label="Computed parameters",
-            menu=computed_parameters
-        )
-
-        computed_parameters.add_command(
-            label="Edit parameters",
             font=FONTS['DATA_FONT'],
             command=self.open_computed_parameters
         )
+        settings.add_separator()
+        settings.add_checkbutton(
+            label="Refined uncertainty (Technique 2)",
+            font=FONTS['DATA_FONT'],
+            variable=self.refined_uncertainty_var,
+            onvalue=True,
+            offvalue=False,
+            command=self.toggle_refined_uncertainty
+        )
+
+    def toggle_refined_uncertainty(self) -> None:
+        """
+        Settings -> Refined uncertainty (Technique 2).
+
+        Ticked: 2σ(ITC) is the Technique 2 value from all points of the
+        interval (Formulas.itc_slope_uncertainty), and 2σ(DRDY) follows it.
+        Unticked: the standard formula. Both are computed at Proceed, so
+        the switch only changes what the table shows.
+        """
+        self.main_app.refined_uncertainty = self.refined_uncertainty_var.get()
+        if hasattr(self, 'itc1'):
+            self.select_uncertainty()
+            self.update_table()
+
+    def select_uncertainty(self) -> None:
+        """Set the 2σ values shown in the table, by the Settings option."""
+        if self.refined_uncertainty_var.get() and self.refined is not None:
+            self.itc_err = self.refined["u_total"]
+            self.drdy_err = self.drdy_err_refined
+        else:
+            self.itc_err = self.itc_err_standard
+            self.drdy_err = self.drdy_err_standard
+
     def open_computed_parameters(self) -> None:
         """
         Open a window for editing computed/reference ITC parameters.
@@ -1197,8 +1235,19 @@ class ITC_processing:
             self.drdy3,
             self.dev3_drdy
         ) = self.technique_3()
-        self.itc_err = self.error()[0]
-        self.drdy_err = self.error()[1]
+        # Both uncertainties are computed; Settings decides which is shown
+        self.itc_err_standard, self.drdy_err_standard = self.error()
+        self.refined = Formulas.itc_slope_uncertainty(
+            self.Reactivity, self.Temperature,
+            self.start_index, self.finish_index, self.beta
+        )
+        self.drdy_err_refined = (
+            Formulas.drdy_error(
+                self.refined["u_total"], self.DTC, self.boric_acid
+            )
+            if self.refined is not None else None
+        )
+        self.select_uncertainty()
 
         self.update_table()
 
@@ -1337,26 +1386,30 @@ class ITC_processing:
             ]
         )
 
-        self.tree.item(
-            "2sigma_ITC",
-            values=[
-                "2σ(ITC):",
-                f'{self.itc_err:.{self.DECIMAL}f} pcm/°C',
-                # "pcm/°C"
+        # With Settings -> Refined uncertainty the 2σ(ITC) row also shows
+        # the components of the Technique 2 value (pcm/°C) and the points
+        itc_err_values = [
+            "2σ(ITC):",
+            f'{self.itc_err:.{self.DECIMAL}f} pcm/°C',
+        ]
+        drdy_err_values = [
+            "2σ(DRDY):",
+            (
+                f'{self.drdy_err:.{self.DECIMAL}f} %/(g/cm³)'
+                if self.drdy_err is not None else "None"
+            ),
+        ]
+        if self.refined_uncertainty_var.get() and self.refined is not None:
+            itc_err_values += [
+                "Refined (Tech. 2)",
+                f"stat. {self.refined['u_stat']:.{self.DECIMAL}f}",
+                f"meth. {self.refined['u_meth']:.{self.DECIMAL}f}",
+                f"n = {self.refined['n']}",
             ]
-        )
+            drdy_err_values += ["from refined"]
 
-        self.tree.item(
-            "2sigma_DRDY",
-            values=[
-                "2σ(DRDY):",
-                (
-                    f'{self.drdy_err:.{self.DECIMAL}f} %/(g/cm³)'
-                    if self.drdy_err is not None else "None"
-                ),
-                # "%/(g/cm³)" if self.drdy_err is not None else ""
-            ]
-        )
+        self.tree.item("2sigma_ITC", values=itc_err_values)
+        self.tree.item("2sigma_DRDY", values=drdy_err_values)
 
         self.tree.item(
             "Units:",
