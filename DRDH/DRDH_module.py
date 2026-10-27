@@ -15,17 +15,16 @@ from Settings import (
 )
 
 
-# Combobox item that adds an auxiliary (not used in the DRDH computation)
-# parameter, which is only shown on the DRDH_processing plot.
-ADD_PARAMETER = "Add new parameter"
-
-# Prefix of auxiliary parameters in the NFME_parameters list
-EXTRA_PREFIX = "Added: "
-
 # ---------------------------------------------------------------------
 # New constants (the same in DRDH / ITC / PCR / Imax modules).
 # Move them to Settings if needed.
 # ---------------------------------------------------------------------
+
+# Combobox item that adds an auxiliary (not used in the computation)
+# parameter, which is only shown on the plot of the processing window.
+ADD_PARAMETER = "Add new parameter"
+EXTRA_PREFIX = "Added: "       # prefix of auxiliary parameters in the lists
+EXTRA_DIALOG_TITLE = "Add new parameter"
 
 # Ctrl+Z / Ctrl+Y
 UNDO_LIMIT = 200                       # how many steps can be reverted

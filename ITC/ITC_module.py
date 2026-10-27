@@ -1,6 +1,6 @@
 import sys
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, simpledialog
 from tkinter import font as tkfont
 from typing import Any, Optional, List
 import pandas as pd
@@ -19,6 +19,12 @@ from Settings import (
 # New constants (the same in DRDH / ITC / PCR / Imax modules).
 # Move them to Settings if needed.
 # ---------------------------------------------------------------------
+
+# Combobox item that adds an auxiliary (not used in the computation)
+# parameter, which is only shown on the plot of the processing window.
+ADD_PARAMETER = "Add new parameter"
+EXTRA_PREFIX = "Added: "       # prefix of auxiliary parameters in the lists
+EXTRA_DIALOG_TITLE = "Add new parameter"
 
 # Ctrl+Z / Ctrl+Y
 UNDO_LIMIT = 200                       # how many steps can be reverted
@@ -222,6 +228,10 @@ class ITC_module:
 
         # Computed parameters entered by the operator: {name: value}
         self.computed_values: dict[str, float] = {}
+
+        # Auxiliary parameters (drawn only in the processing window):
+        # [{"name", "values" (Series), "columns"}]
+        self.extra_parameters: list[dict[str, Any]] = []
 
         # Undo / redo (snapshots of the whole parameters state)
         self._undo_stack: list[dict[str, Any]] = []
@@ -630,7 +640,8 @@ class ITC_module:
                 "Time",
                 "Temperature",
                 "Reactivity",
-                "Group position"
+                "Group position",
+                ADD_PARAMETER
                 ],
             state="readonly",
             width=20,
@@ -759,6 +770,10 @@ class ITC_module:
 
         if not self.selected_columns:
             Messages.show("warning", "NO_COLUMNS")
+            return
+
+        if selected_param == ADD_PARAMETER:
+            self.add_extra_parameter()
             return
 
         rules = PARAMETER_RULES[selected_param]
@@ -1023,6 +1038,7 @@ class ITC_module:
         self.NFME_parameters = []
         self.computed_parameters = []
         self.computed_values = {}
+        self.extra_parameters = []
         self._undo_stack.clear()
         self._redo_stack.clear()
 
@@ -1192,6 +1208,119 @@ class ITC_module:
             self._close_param_window(kind)
 
     # ------------------------------------------------------------------
+    # Auxiliary parameters
+    # ------------------------------------------------------------------
+    def ask_extra_parameter_name(self) -> Optional[str]:
+        """
+        Ask the user for the name of a new auxiliary parameter.
+
+        The name is used for the scale and for the legend, so it has to be
+        non-empty and unique. Returns None if the dialog is cancelled.
+        """
+        existing = {p["name"].casefold() for p in self.extra_parameters}
+        initial = ""
+
+        while True:
+            name = simpledialog.askstring(
+                EXTRA_DIALOG_TITLE,
+                "Enter the parameter name\n"
+                "(it will be shown on its scale and in the legend):",
+                initialvalue=initial,
+                parent=self.root
+            )
+            if name is None:
+                return None
+
+            name = name.strip()
+            if not name:
+                messagebox.showwarning(
+                    EXTRA_DIALOG_TITLE,
+                    "The name must not be empty.",
+                    parent=self.root
+                )
+                continue
+
+            if name.casefold() in existing:
+                messagebox.showwarning(
+                    EXTRA_DIALOG_TITLE,
+                    f"The parameter '{name}' already exists. "
+                    "Enter another name.",
+                    parent=self.root
+                )
+                initial = name
+                continue
+
+            return name
+
+    def add_extra_parameter(self) -> None:
+        """
+        Add an auxiliary parameter from the currently selected columns.
+
+        The parameter is not used in the computation: it is only drawn in
+        the processing window on its own scale. Any number of them can be
+        added; the combobox keeps "Add new parameter" selected for the
+        next one.
+        """
+        columns = self.selected_columns.copy()
+        raw = self.df[columns]
+
+        # Numbers may use a decimal comma
+        text = raw.astype(str).apply(
+            lambda s: s.str.strip().str.replace(',', '.', regex=False)
+        )
+        data = text.apply(pd.to_numeric, errors='coerce')
+        blank = text.isin(['', 'nan', 'None'])
+
+        bad = data.isna() & ~blank
+        if bad.any().any():
+            col = next(c for c in columns if bad[c].any())
+            value = text[col][bad[col]].iloc[0]
+            Messages.show("error", "DATA_FORMAT", col=col, value=value)
+            self.clear_selected_column_buttons()
+            return
+
+        if data.isna().all().all():
+            messagebox.showerror(
+                EXTRA_DIALOG_TITLE,
+                "The selected columns contain no numeric data.",
+                parent=self.root
+            )
+            self.clear_selected_column_buttons()
+            return
+
+        if len(columns) > 1:
+            proceed = messagebox.askyesno(
+                EXTRA_DIALOG_TITLE,
+                f"{len(columns)} columns are selected. Their mean will be "
+                "shown as ONE parameter on a single scale.\n\nContinue?",
+                parent=self.root
+            )
+            if not proceed:
+                self.clear_selected_column_buttons()
+                return
+
+        name = self.ask_extra_parameter_name()
+        if name is None:
+            # Cancelled: the columns stay selected so it can be repeated
+            return
+
+        result: pd.Series = (
+            data.mean(axis=1) if len(columns) > 1 else data.iloc[:, 0]
+        )
+
+        key = f"{EXTRA_PREFIX}{name}"
+        self._push_undo()
+        self.extra_parameters.append(
+            {"name": name, "values": result, "columns": columns}
+        )
+        self.parameter_columns[key] = columns
+        self.NFME_parameters.append(key)
+
+        # Like for the other parameters, the columns become locked
+        self.selected_columns.clear()
+        self.refresh_ui()
+
+    # ------------------------------------------------------------------
     # Clearing
     # ------------------------------------------------------------------
     def clear_parameters(
@@ -1241,7 +1370,12 @@ class ITC_module:
 
     def _remove_nfme_parameter(self, key: str) -> None:
         self.parameter_columns.pop(key, None)
-        if key in ITC_NFME_PARAMS:
+        if key.startswith(EXTRA_PREFIX):
+            extra_name = key[len(EXTRA_PREFIX):]
+            self.extra_parameters = [
+                p for p in self.extra_parameters if p["name"] != extra_name
+            ]
+        elif key in ITC_NFME_PARAMS:
             for attr, default in self._nfme_attrs(key).items():
                 setattr(self, attr, self._copy_value(default))
             if ITC_NFME_PARAMS[key].get("headers") and hasattr(self, "column_headers"):
@@ -1281,6 +1415,10 @@ class ITC_module:
         return {
             "order": list(self.NFME_parameters),
             "params": params,
+            "extras": [
+                dict(p, columns=list(p["columns"]))
+                for p in self.extra_parameters
+            ],
             "computed": dict(self.computed_values),
             "selected": list(self.selected_columns),
         }
@@ -1292,6 +1430,7 @@ class ITC_module:
                 setattr(self, attr, self._copy_value(default))
         if hasattr(self, "column_headers"):
             self.column_headers = {}
+        self.extra_parameters = []
         for info in ITC_COMPUTED_PARAMS.values():
             setattr(self, info["attr"], info["default"])
 
@@ -1301,9 +1440,19 @@ class ITC_module:
         self.parameter_columns.clear()
         self.NFME_parameters = []
         self.computed_values = {}
+        self.extra_parameters = []
         self.computed_parameters = []
 
+        extras = {p["name"]: p for p in state["extras"]}
         for key in state["order"]:
+            if key.startswith(EXTRA_PREFIX):
+                extra = extras[key[len(EXTRA_PREFIX):]]
+                self.extra_parameters.append(
+                    dict(extra, columns=list(extra["columns"]))
+                )
+                self.parameter_columns[key] = list(extra["columns"])
+                self.NFME_parameters.append(key)
+                continue
             cols, values = state["params"][key]
             for attr, value in values.items():
                 setattr(self, attr, self._copy_value(value))

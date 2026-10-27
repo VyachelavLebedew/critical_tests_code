@@ -1,7 +1,7 @@
 import os
 import tkinter as tk
-from tkinter import ttk, filedialog
-from typing import Any, Optional
+from tkinter import ttk, filedialog, messagebox
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -17,10 +17,59 @@ from Buttons import MainButtons, TestButtons, SmallButtons
 from Messages import Messages
 from Settings import (
     show_info, FONTS, COLORS, GAPS, SPLITTER_MINSIZES,
-    PLOT, TABLE, ENTRY_WIDTH, IMAX_BASE_RANGE
+    PLOT, TABLE, ENTRY_WIDTH, IMAX_BASE_RANGE, PLOT_STYLE
 )
 
 mpl.rcParams['font.family'] = 'Times New Roman'
+
+# ---------------------------------------------------------------------
+# New constants of the auxiliary parameters and the legend (the same in
+# DRDH / ITC / PCR / Imax processing). Move them to Settings if needed.
+# Already existing Settings values are used where they fit:
+#   PLOT['AXIS_SHIFT']           distance between the scales (points)
+#   PLOT['PLOT_LABEL_SIZE']      font size of scale labels and the legend
+#   PLOT_STYLE['GROUP_WIDTH']    line width of the auxiliary parameters
+#   CURSOR['CURSOR_LINEWIDTH']   width of the extended cursor lines
+#   ENTRY_WIDTH                  width of the name field (x2)
+# ---------------------------------------------------------------------
+
+# Colors of the lines of the auxiliary parameters
+EXTRA_COLORS = (
+    "tab:purple", "tab:brown", "tab:olive", "tab:cyan",
+    "tab:pink", "tab:gray", "darkgoldenrod", "teal",
+)
+EXTRA_SCALE_MARGIN = 0.05     # padding of the scale of a parameter (share)
+EXTRA_VALUE_FORMAT = ".6g"    # format of a value in the extended cursor
+EXTRA_VALUE_NA = "n/a"        # shown instead of a missing value
+
+# Legend (Plot -> Legend)
+SHOW_LEGEND_DEFAULT = True
+LEGEND_LOCATION = "upper left"
+LEGEND_FRAME_ALPHA = 0.85
+LEGEND_MAX_ROWS = 6           # more entries are split into several columns
+
+# Plot menu
+MENU_PLOT = "Plot"
+MENU_EDIT_ENTRIES = "Edit entries"
+MENU_LEGEND = "Legend"
+
+# "Edit entries" window
+EDIT_ENTRIES_TITLE = "Edit entries"
+EDIT_ENTRIES_EMPTY_TEXT = (
+    "No additional parameters.\n"
+    "Add them in the {module} module:\n"
+    "'Add new parameter'."
+)
+EDIT_ENTRIES_HEADINGS = ("Show", "Name")
+EDIT_ENTRIES_APPLY = "Apply"
+EDIT_ENTRIES_CANCEL = "Cancel"
+EDIT_ENTRIES_CLOSE = "Close"
+EDIT_ENTRIES_EMPTY_NAME = "A name must not be empty."
+EDIT_ENTRIES_DUPLICATE_NAME = "The name '{name}' is used twice."
+
+# Imax processing
+IMAX_CURRENT_AXIS_SHIFT = 65       # shift of the scale of the currents
+IMAX_LEGEND_LOCATION = "best"
 
 
 
@@ -60,6 +109,9 @@ class Imax_processing:
         self.point_marker: Optional[Any] = None
         self.active_entry: Optional[ttk.Entry] = None
         self._zoom_factor = 1.25
+
+        # Auxiliary parameters from Imax_module (drawn on the plot only)
+        self.init_extra_parameters()
 
     @property
     def results(self) -> list[dict[str, Any]]:
@@ -108,6 +160,10 @@ class Imax_processing:
             label='Edit computed parameters', font=FONTS['DATA_FONT'],
             command=self.edit_computed_parameters
         )
+
+        plot_menu = tk.Menu(self.menu_bar, tearoff=1)
+        self.menu_bar.add_cascade(label=MENU_PLOT, menu=plot_menu)
+        self.create_plot_menu_items(plot_menu)
 
         save = tk.Menu(self.menu_bar, tearoff=1)
         self.menu_bar.add_cascade(label='Save', menu=save)
@@ -240,7 +296,9 @@ class Imax_processing:
             'tab:olive', 'tab:cyan', 'tab:gray'
         ]
         self.ax3 = self.ax.twinx()
-        self.ax3.spines['right'].set_position(('outward', 65))
+        self.ax3.spines['right'].set_position(
+            ('outward', IMAX_CURRENT_AXIS_SHIFT)
+        )
         for side in ('left', 'top', 'bottom'):
             self.ax3.spines[side].set_visible(False)
 
@@ -260,13 +318,9 @@ class Imax_processing:
         self.ax3.set_visible(False)
         self.ax3.set_in_layout(False)
 
-        # Every axis that may receive mouse events
-        self.plot_axes = (self.ax, self.ax2, self.ax3)
-
         # Keep the temperature axis (curve, legend, selection) on top
         self.ax.set_zorder(max(self.ax2.get_zorder(), self.ax3.get_zorder()) + 1)
         self.ax.patch.set_visible(False)
-        self.update_legend()
 
         # The date is added only if the experiment lasts longer than a day.
         span_days = float(self.time_num.max() - self.time_num.min())
@@ -284,26 +338,325 @@ class Imax_processing:
         self.canvas.mpl_connect('button_press_event', self.on_plot_click)
         self.canvas.mpl_connect('scroll_event', self.on_scroll)
 
-    def update_legend(self) -> None:
-        """Legend with the temperature and, if shown, the speed curve."""
-        lines = [self.temperature_line]
-        if self.ax2.get_visible():
-            lines.append(self.rate_line)
-            lines.append(self.target_line)
-        if self.ax3.get_visible():
-            lines.extend(self.current_lines)
+        # The plot as a container, like in the other modules
+        self.plot = {
+            'fig': self.fig, 'ax1': self.ax,
+            'ax2': self.ax2, 'ax3': self.ax3,
+            'canvas': self.canvas, 'toolbar': self.toolbar,
+            # Scales of the auxiliary parameters (see build_extra_axes)
+            'extra_axes': [],
+        }
+        self.plot_windows = [self.plot]
+        self.build_extra_axes(self.plot)
 
+    def plot_axes(self, plot) -> tuple:
+        """
+        All axes of the plot: temperature, speed, currents and the scales
+        of the auxiliary parameters. Every one of them has to be accepted
+        for a mouse event.
+        """
+        extra = [item["ax"] for item in plot.get("extra_axes", [])]
+        return (plot["ax1"], plot["ax2"], plot["ax3"], *extra)
+
+    def extra_axis_shift(self, plot, k: int) -> float:
+        """
+        Distance (points) of the k-th auxiliary scale from the plot. The
+        scales follow the visible ones (speed, currents), so there is no gap
+        when the checkboxes are not ticked.
+        """
+        if self.ax3.get_visible():
+            base = IMAX_CURRENT_AXIS_SHIFT + PLOT['AXIS_SHIFT']
+        elif self.ax2.get_visible():
+            base = PLOT['AXIS_SHIFT']
+        else:
+            base = 0
+        return base + PLOT['AXIS_SHIFT'] * k
+
+    # ------------------------------------------------------------------
+    # Auxiliary parameters and the legend of the plots
+    # ------------------------------------------------------------------
+    def init_extra_parameters(self) -> None:
+        """
+        Take the auxiliary parameters from Imax_module.
+
+        They only appear on the plot (each on its own scale); "visible" and
+        "name" are changed in Plot -> Edit entries.
+        """
+        self.extra_parameters: List[Dict[str, Any]] = []
+        for i, item in enumerate(
+            getattr(self.main_app, "extra_parameters", None) or []
+        ):
+            self.extra_parameters.append({
+                "name": item["name"],
+                "values": np.asarray(item["values"], dtype=float),
+                "columns": list(item.get("columns", [])),
+                "visible": True,
+                "color": EXTRA_COLORS[i % len(EXTRA_COLORS)],
+            })
+
+        # Legend of the plots (Plot -> Legend)
+        self.show_legend: bool = SHOW_LEGEND_DEFAULT
+
+    @staticmethod
+    def widget_alive(widget) -> bool:
+        """True if the widget still exists (was not destroyed by the user)."""
+        try:
+            return bool(widget.winfo_exists())
+        except Exception:
+            return False
+
+    def build_extra_axes(self, plot) -> None:
+        """
+        (Re)create the scales of the visible auxiliary parameters.
+
+        Every parameter gets its own y scale on the right of the other
+        scales, named by the user, plus an entry in the legend. Called when
+        a window is created and after "Edit entries".
+        """
+        for item in plot["extra_axes"]:
+            try:
+                item["ax"].remove()
+            except Exception:
+                pass
+        plot["extra_axes"] = []
+        plot["cursor_hlines_extra"] = []
+
+        ax1 = plot["ax1"]
+        visible = [item for item in self.extra_parameters if item["visible"]]
+
+        for k, param in enumerate(visible):
+            color = param["color"]
+            values = param["values"]
+
+            ax = ax1.twinx()
+            ax.set_autoscale_on(False)
+
+            ax.spines["right"].set_position(
+                ("outward", self.extra_axis_shift(plot, k))
+            )
+            for side in ("left", "top", "bottom"):
+                ax.spines[side].set_visible(False)
+            ax.spines["right"].set_visible(True)
+            ax.set_ylabel(param["name"], fontsize=PLOT['PLOT_LABEL_SIZE'])
+
+            (line,) = ax.plot(
+                self.times, values,
+                color=color,
+                linewidth=PLOT_STYLE['GROUP_WIDTH'],
+                label=param["name"]
+            )
+
+            finite = values[np.isfinite(values)]
+            if finite.size:
+                low, high = float(finite.min()), float(finite.max())
+                pad = EXTRA_SCALE_MARGIN * (high - low)
+                if pad == 0:
+                    pad = abs(low) * EXTRA_SCALE_MARGIN or 1.0
+                ax.set_ylim(low - pad, high + pad)
+
+            plot["extra_axes"].append(
+                {"ax": ax, "param": param, "line": line}
+            )
+
+        self.update_legend(plot)
+
+    def update_legend(self, plot) -> None:
+        """
+        Legend with the temperature and, if shown, the speed curve, the
+        currents and the auxiliary parameters (Plot -> Legend).
+        """
         legend = self.ax.get_legend()
         if legend is not None:
             legend.remove()
-        self.ax.legend(lines, [line.get_label() for line in lines], loc='best')
+
+        if self.show_legend:
+            lines = [self.temperature_line]
+            if self.ax2.get_visible():
+                lines.append(self.rate_line)
+                lines.append(self.target_line)
+            if self.ax3.get_visible():
+                lines.extend(self.current_lines)
+            lines.extend(item["line"] for item in plot["extra_axes"])
+            self.ax.legend(
+                lines, [line.get_label() for line in lines],
+                loc=IMAX_LEGEND_LOCATION
+            )
+
+        plot["canvas"].draw_idle()
+
+    def toggle_legend(self) -> None:
+        """Show or hide the legend in every open plot window."""
+        self.show_legend = bool(self.show_legend_var.get())
+        for plot in self.plot_windows:
+            self.update_legend(plot)
+
+    def refresh_extra_axes(self) -> None:
+        """Rebuild the auxiliary scales in every open plot window."""
+        for plot in self.plot_windows:
+            self.build_extra_axes(plot)
+
+    def edit_entries(self) -> None:
+        """
+        Window to rename the auxiliary parameters and to switch them on
+        and off (check boxes). The plots are updated on "Apply".
+        """
+        if self.widget_alive(getattr(self, "edit_entries_window", None)):
+            self.edit_entries_window.lift()
+            self.edit_entries_window.focus_force()
+            return
+
+        window = tk.Toplevel(self.root)
+        window.title(EDIT_ENTRIES_TITLE)
+        window.resizable(False, False)
+        window.config(bg=COLORS['PARAMETERS_BACKGROUND_COLOR'])
+        self.edit_entries_window = window
+
+        frame = tk.Frame(window, bg=COLORS['PARAMETERS_BACKGROUND_COLOR'])
+        frame.grid(
+            row=0, column=0,
+            padx=GAPS['GAPS_X']['PAD_X_10'],
+            pady=GAPS['GAPS_Y']['PAD_Y_10']
+        )
+
+        self.edit_entries_rows = []
+
+        if not self.extra_parameters:
+            tk.Label(
+                frame,
+                text=EDIT_ENTRIES_EMPTY_TEXT.format(module="Imax"),
+                font=FONTS['DATA_FONT'],
+                bg=COLORS['PARAMETERS_BACKGROUND_COLOR'],
+                justify="left"
+            ).grid(row=0, column=0, padx=10, pady=10)
+
+        else:
+            for column, heading in enumerate(EDIT_ENTRIES_HEADINGS):
+                tk.Label(
+                    frame, text=heading,
+                    font=FONTS['DATA_FONT'],
+                    bg=COLORS['PARAMETERS_BACKGROUND_COLOR']
+                ).grid(row=0, column=column, padx=GAPS['GAPS_X']['PAD_X_10'])
+
+            for row, param in enumerate(self.extra_parameters, start=1):
+                visible_var = tk.BooleanVar(
+                    master=window, value=param["visible"]
+                )
+                name_var = tk.StringVar(master=window, value=param["name"])
+
+                tk.Checkbutton(
+                    frame,
+                    variable=visible_var,
+                    bg=COLORS['PARAMETERS_BACKGROUND_COLOR'],
+                    activebackground=COLORS['PARAMETERS_BACKGROUND_COLOR']
+                ).grid(
+                    row=row, column=0,
+                    padx=GAPS['GAPS_X']['PAD_X_10'],
+                    pady=GAPS['GAPS_Y']['PAD_Y_5']
+                )
+                tk.Entry(
+                    frame,
+                    textvariable=name_var,
+                    width=ENTRY_WIDTH * 2,
+                    font=FONTS['DATA_FONT']
+                ).grid(
+                    row=row, column=1,
+                    padx=GAPS['GAPS_X']['PAD_X_10'],
+                    pady=GAPS['GAPS_Y']['PAD_Y_5']
+                )
+
+                self.edit_entries_rows.append(
+                    (param, visible_var, name_var)
+                )
+
+        button_frame = tk.Frame(
+            frame, bg=COLORS['PARAMETERS_BACKGROUND_COLOR']
+        )
+        button_frame.grid(
+            row=len(self.extra_parameters) + 1, column=0, columnspan=2,
+            pady=GAPS['GAPS_Y']['PAD_Y_10_20']
+        )
+
+        if self.extra_parameters:
+            TestButtons(
+                button_frame,
+                text=EDIT_ENTRIES_APPLY,
+                command=self.apply_edit_entries
+            ).grid(row=0, column=0, padx=GAPS['GAPS_X']['PAD_X_5'])
+
+        MainButtons(
+            button_frame,
+            text=(
+                EDIT_ENTRIES_CANCEL if self.extra_parameters
+                else EDIT_ENTRIES_CLOSE
+            ),
+            command=self.close_edit_entries
+        ).grid(row=0, column=1, padx=GAPS['GAPS_X']['PAD_X_5'])
+
+        window.protocol("WM_DELETE_WINDOW", self.close_edit_entries)
+        window.bind("<Escape>", lambda event: self.close_edit_entries())
+        if self.extra_parameters:
+            window.bind("<Return>", lambda event: self.apply_edit_entries())
+
+    def apply_edit_entries(self) -> None:
+        """Check the names, store names and flags, redraw the plots."""
+        names = []
+        for param, visible_var, name_var in self.edit_entries_rows:
+            name = name_var.get().strip()
+            if not name:
+                messagebox.showwarning(
+                    EDIT_ENTRIES_TITLE, EDIT_ENTRIES_EMPTY_NAME,
+                    parent=self.edit_entries_window
+                )
+                return
+            if name.casefold() in names:
+                messagebox.showwarning(
+                    EDIT_ENTRIES_TITLE,
+                    EDIT_ENTRIES_DUPLICATE_NAME.format(name=name),
+                    parent=self.edit_entries_window
+                )
+                return
+            names.append(name.casefold())
+
+        for param, visible_var, name_var in self.edit_entries_rows:
+            param["name"] = name_var.get().strip()
+            param["visible"] = bool(visible_var.get())
+
+        self.refresh_extra_axes()
+        self.close_edit_entries()
+
+    def close_edit_entries(self) -> None:
+        """Close the "Edit entries" window."""
+        window = getattr(self, "edit_entries_window", None)
+        if self.widget_alive(window):
+            window.destroy()
+
+        for attr in ("edit_entries_window", "edit_entries_rows"):
+            if hasattr(self, attr):
+                delattr(self, attr)
+
+    def create_plot_menu_items(self, menu: tk.Menu) -> None:
+        """Edit entries and Legend items of the Plot menu."""
+        menu.add_command(
+            label=MENU_EDIT_ENTRIES,
+            font=FONTS['DATA_FONT'],
+            command=self.edit_entries
+        )
+        self.show_legend_var = tk.BooleanVar(
+            master=self.root.winfo_toplevel(), value=self.show_legend
+        )
+        menu.add_checkbutton(
+            label=MENU_LEGEND,
+            font=FONTS['DATA_FONT'],
+            variable=self.show_legend_var,
+            command=self.toggle_legend
+        )
 
     def toggle_rate_display(self) -> None:
         """Show or hide the temperature rise speed on the plot."""
         show = self.rate_var.get() == 1
         self.ax2.set_visible(show)
         self.ax2.set_in_layout(show)
-        self.update_legend()
+        self.build_extra_axes(self.plot)
         self.canvas.draw_idle()
 
     def currents_shown(self) -> bool:
@@ -315,7 +668,7 @@ class Imax_processing:
         show = self.currents_shown()
         self.ax3.set_visible(show)
         self.ax3.set_in_layout(show)
-        self.update_legend()
+        self.build_extra_axes(self.plot)
         self.canvas.draw_idle()
 
     def refresh_point_marker(self) -> None:
@@ -467,7 +820,7 @@ class Imax_processing:
         # Do not set points while zoom / pan of the toolbar is active.
         if self.toolbar.mode != '':
             return
-        if event.inaxes not in self.plot_axes or event.xdata is None:
+        if event.inaxes not in self.plot_axes(self.plot) or event.xdata is None:
             return
         idx = self._nearest_index(float(event.xdata))
         if event.button == 1:
@@ -776,7 +1129,7 @@ class Imax_processing:
 
     def on_scroll(self, event) -> None:
         """Zoom the X axis around the mouse cursor; Y axis remains unchanged."""
-        if event.inaxes not in self.plot_axes or event.xdata is None:
+        if event.inaxes not in self.plot_axes(self.plot) or event.xdata is None:
             return
         if self.toolbar.mode != '':
             return
@@ -883,6 +1236,7 @@ class Imax_processing:
                 f.write('\t'.join(map(str, row)) + '\n')
 
     def back(self, window: tk.Widget) -> None:
+        self.close_edit_entries()
         root_window = self.root.winfo_toplevel()
         root_window.config(menu=None)
         if self.menu_bar is not None:
