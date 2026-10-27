@@ -1,5 +1,7 @@
+import sys
 import tkinter as tk
 from tkinter import ttk, simpledialog, messagebox
+from tkinter import font as tkfont
 from typing import Any, Optional, List
 import pandas as pd
 
@@ -20,6 +22,119 @@ ADD_PARAMETER = "Add new parameter"
 # Prefix of auxiliary parameters in the NFME_parameters list
 EXTRA_PREFIX = "Added: "
 
+# ---------------------------------------------------------------------
+# New constants (the same in DRDH / ITC / PCR / Imax modules).
+# Move them to Settings if needed.
+# ---------------------------------------------------------------------
+
+# Ctrl+Z / Ctrl+Y
+UNDO_LIMIT = 200                       # how many steps can be reverted
+UNDO_KEYSYMS = ("z", "cyrillic_ya")    # works with the Russian layout too
+REDO_KEYSYMS = ("y", "cyrillic_en")
+UNDO_KEYCODE_WIN = 90                  # Windows virtual key codes of Z and Y
+REDO_KEYCODE_WIN = 89
+SHIFT_STATE_MASK = 0x1                 # Ctrl+Shift+Z is redo as well
+
+# "Parameters" menu
+MENU_PARAMETERS = "Parameters"
+MENU_SHOW_NFME = "Show NFME parameters"
+MENU_SHOW_COMPUTED = "Show computed parameters"
+
+# "Parameters" windows (NFME / computed)
+PARAMS_WINDOW_TITLE_NFME = "NFME parameters"
+PARAMS_WINDOW_TITLE_COMPUTED = "Computed parameters"
+PARAMS_WINDOW_GEOMETRY = "460x320"
+PARAMS_TREE_STYLE = "Params.Treeview"
+PARAMS_ROW_PADDING = 6                 # added to the font height of a row
+PARAMS_COLUMN_WIDTH = {"parameter": 190, "value": 230}
+PARAMS_HEADINGS = {
+    "parameter": "Parameter",
+    "NFME": "Column(s)",
+    "computed": "Value",
+}
+PARAMS_BUTTON_CLEAR = "Clear"
+PARAMS_BUTTON_CLEAR_ALL = "Clear all"
+PARAMS_HINT_SELECT = "Click a parameter in the list first."
+
+_SUBSCRIPTS = str.maketrans("0123456789", "₀₁₂₃₄₅₆₇₈₉")
+
+# NFME parameters: attribute of DRDH_module that stores the data, label in
+# the "Required Parameters" column and its default (not obtained) text.
+DRDH_NFME_PARAMS: dict[str, dict[str, str]] = {
+    "Time": {
+        "attr": "Time",
+        "label": "time_required_label",
+        "text": "⏱ Time :1",
+    },
+    "Reactivity": {
+        "attr": "Reactivity",
+        "label": "reactivity_required_label",
+        "text": "⏱ Reactivity :2",
+    },
+    "Boric acid concentration": {
+        "attr": "boric_acid_NFME",
+        "label": "boric_acid_NFME_required_label",
+        "text": "⏱ Boric acid :2",
+    },
+}
+for _n in range(12, 0, -1):
+    DRDH_NFME_PARAMS[f"{_n} Group position"] = {
+        "attr": f"H{_n}_position",
+        "label": f"H{_n}_position_required_label",
+        "text": f"⏱ H{str(_n).translate(_SUBSCRIPTS)} :1",
+    }
+
+# Computed parameters (entered by the operator): attribute, entry field,
+# label (default / obtained text), default value of the entry and the title
+# shown in the "computed parameters" window.
+DRDH_COMPUTED_PARAMS: dict[str, dict[str, Any]] = {
+    "Group_length": {
+        "attr": "Group_length",
+        "entry": "Group_length_entry",
+        "label": "Group_length_required_label",
+        "text": "  Group length",
+        "ok": "✓ Group length",
+        "default": 388.73,
+        "title": "Group length, cm",
+    },
+    "Overlap": {
+        "attr": "overlap",
+        "entry": "overlap_entry",
+        "label": "overlap_required_label",
+        "text": "  Overlap",
+        "ok": "✓ Overlap",
+        "default": 50.0,
+        "title": "Overlap, %",
+    },
+    "DRDC": {
+        "attr": "DRDC",
+        "entry": "DRDC_entry",
+        "label": "DRDC_required_label",
+        "text": "⏱ DRDC",
+        "ok": "✓ DRDC",
+        "default": None,
+        "title": "DRDC, %/(g/kg)",
+    },
+    "boric_acid_start": {
+        "attr": "boric_acid_start",
+        "entry": "boric_acid_start_entry",
+        "label": "boric_acid_start_required_label",
+        "text": "⏱ С(H₃BO₃) initial",
+        "ok": "✓ Boric acid concentration (initial)",
+        "default": None,
+        "title": "С(H₃BO₃) initial, g/kg",
+    },
+    "boric_acid_finish": {
+        "attr": "boric_acid_finish",
+        "entry": "boric_acid_finish_entry",
+        "label": "boric_acid_finish_required_label",
+        "text": "⏱ С(H₃BO₃) final",
+        "ok": "✓ Boric acid concentration (final)",
+        "default": None,
+        "title": "С(H₃BO₃) final, g/kg",
+    },
+}
+
 
 class DRDH_module:
     """
@@ -37,12 +152,11 @@ class DRDH_module:
         buttons: Create all buttons in the DRDH_module interface.
         combobox: Create a combobox to select one of the parameters required.
         create_menu: Create the top menu bar for DRDH_module window.
-        show_selected_parameters: Represent parameters (current, NFME,
-        computed) chosen.
-        clear_all_parameters: Clear all parameters from a given attribute list.
-        clear_last_parameter: Remove the last item from currently chosen
-        NFME parameters.
-        clear_selected_parameters: Clear selected parameters from a listbox.
+        show_parameters: Window with the NFME / computed parameters
+        (clickable rows, Clear / Clear all).
+        clear_parameters: Clear chosen (or all) NFME / computed parameters.
+        refresh_ui: Redraw buttons, labels and entries from the state.
+        undo / redo: Ctrl+Z / Ctrl+Y.
         start_DRDH: Launch DRDH computation process.
         get_parameter: Obtain NFME parameter via buttons.
         get_entry: Obtain a computed parameter via entry field.
@@ -90,7 +204,7 @@ class DRDH_module:
         self.DRDH_frame: Optional[tk.Frame] = None
         self.menu_bar: Optional[tk.Menu] = None
         self.Group_length: float = 388.73
-        self.overlap: float = 50
+        self.overlap: float = 50.0
         self.DRDC: Optional[float] = None
         self.boric_acid_start: Optional[float] = None
         self.boric_acid_finish: Optional[float] = None
@@ -122,6 +236,17 @@ class DRDH_module:
         self.selected_column_buttons: dict[str, tk.Button] = {}
         self.parameter_columns: dict[str, list[str]] = {}
 
+        # Computed parameters entered by the operator: {name: value}
+        self.computed_values: dict[str, float] = {}
+
+        # Undo / redo (snapshots of the whole parameters state)
+        self._undo_stack: list[dict[str, Any]] = []
+        self._redo_stack: list[dict[str, Any]] = []
+
+        # Open "parameters" windows: {kind: {"window", "tree"}}
+        self._param_windows: dict[str, dict[str, Any]] = {}
+        self._ctrl_bind_id: Optional[str] = None
+
         # Auxiliary parameters: {"name": str, "values": pd.Series,
         # "columns": list[str]}. They do not take part in the computation,
         # DRDH_processing draws each of them on its own scale.
@@ -133,6 +258,11 @@ class DRDH_module:
 
         Initializes the frame, menu, NFME buttons, labels, entries,
         buttons, and combobox as well for selecting and obtainind parameters.
+
+        The window is also re-created when the operator returns from
+        DRDH_processing (BACK), so everything chosen before is restored
+        from the stored state: pressed buttons, labels, entered values,
+        groups mode and movement type.
         """
         root_window = self.root.winfo_toplevel()
         root_window.config(menu=None)
@@ -148,6 +278,11 @@ class DRDH_module:
         self.buttons()
         self.combobox()
         self.DRDH_frame.update_idletasks()
+
+        # Restore the state into the freshly created widgets
+        self.apply_groups_mode()
+        self.refresh_ui(sync_entries=True)
+        self.bind_undo_redo()
 
     def labels(self) -> None:
         """
@@ -616,6 +751,34 @@ class DRDH_module:
             sticky="w"
         )
 
+    def _combobox_values(self) -> list[str]:
+        """Items of the parameter combobox for the current groups mode."""
+        values = [
+            "Not selected",
+            "Time",
+            "Reactivity",
+            "Boric acid concentration",
+            "12 Group position",
+            "11 Group position",
+            "10 Group position",
+            "9 Group position",
+            "8 Group position",
+            "7 Group position",
+            "6 Group position",
+            "5 Group position",
+            "4 Group position",
+            "3 Group position",
+            "2 Group position",
+            "1 Group position",
+            ADD_PARAMETER,
+        ]
+        if self.groups_count == 10:
+            values = [
+                v for v in values
+                if v not in ("12 Group position", "11 Group position")
+            ]
+        return values
+
     def combobox(self) -> None:
         """
         Create a combobox to select one of the parameters required
@@ -625,25 +788,7 @@ class DRDH_module:
         self.parameter_combobox = ttk.Combobox(
             self.right_frame,
             textvariable=self.selected_param,
-            values=[
-                "Not selected",
-                "Time",
-                "Reactivity",
-                "Boric acid concentration",
-                "12 Group position",
-                "11 Group position",
-                "10 Group position",
-                "9 Group position",
-                "8 Group position",
-                "7 Group position",
-                "6 Group position",
-                "5 Group position",
-                "4 Group position",
-                "3 Group position",
-                "2 Group position",
-                "1 Group position",
-                ADD_PARAMETER,
-                ],
+            values=self._combobox_values(),
             state="readonly",
             width=20,
             font=FONTS['TEXT_FONT']
@@ -665,121 +810,55 @@ class DRDH_module:
 
     def switch_groups_amount(self) -> None:
         """Switch between 12 and 10 control groups."""
+        self.groups_count = 10 if self.groups_count == 12 else 12
+        self.apply_groups_mode()
 
-        if self.groups_count == 12:
-            self.groups_count = 10
-        else:
-            self.groups_count = 12
+    def apply_groups_mode(self) -> None:
+        """
+        Show the current groups mode (12 or 10) in the widgets.
+
+        Called on a switch and every time the window is re-created, since
+        the new widgets are always built in the 12 groups mode.
+        """
+        values = self._combobox_values()
+        self.parameter_combobox["values"] = values
+        if self.selected_param.get() not in values:
+            self.selected_param.set("Not selected")
 
         if self.groups_count == 10:
-            # H12 label binds H10 group
-            self.H12_position_required_label.config(text='⏱ H₁₀ :1')
-
+            # H12 label binds H10 group (see refresh_ui)
             self.H11_position_required_label.config(text='')
             self.H10_position_required_label.config(text='')
-
-            values = list(self.parameter_combobox["values"])
-            values = [v for v in values if v not in ("12 Group position", "11 Group position")]
-            self.parameter_combobox["values"] = values
-
             self.groups_mode_label.config(text="10 groups mode")
-
         else:
-            self.H12_position_required_label.config(text='⏱ H₁₂ :1')
-
-            self.H11_position_required_label.config(text='⏱ H₁₁ :1')
-            self.H10_position_required_label.config(text='⏱ H₁₀ :1')
-
-            self.parameter_combobox["values"] = [
-                "Not selected",
-                "Time",
-                "Reactivity",
-                "Boric acid concentration",
-                "12 Group position",
-                "11 Group position",
-                "10 Group position",
-                "9 Group position",
-                "8 Group position",
-                "7 Group position",
-                "6 Group position",
-                "5 Group position",
-                "4 Group position",
-                "3 Group position",
-                "2 Group position",
-                "1 Group position",
-                ADD_PARAMETER,
-            ]
-
             self.groups_mode_label.config(text="12 groups mode")
+
+        self.refresh_ui()
 
     def create_menu(self) -> None:
         """
         Create the top menu bar for DRDH_module window.
 
         Menu includes:
-            - Currently chosen buttons
-            - NFME parameters (chosen)
-            - Computed parameters (entered)
+            - Parameters (show NFME parameters, show computed parameters)
             - INFO
-            - Groups amount setting
+            - Mode settings (groups amount, movement type)
         """
         self.menu_bar = tk.Menu(self.root)
         self.root.config(menu=self.menu_bar)
 
-        currently_choosen_parameters = tk.Menu(self.menu_bar, tearoff=1)
-        self.menu_bar.add_cascade(
-            label="Currently chosen buttons",
-            menu=currently_choosen_parameters
-        )
+        parameters_menu = tk.Menu(self.menu_bar, tearoff=1)
+        self.menu_bar.add_cascade(label=MENU_PARAMETERS, menu=parameters_menu)
 
-        currently_choosen_parameters.add_command(
-            label="Show selected buttons",
+        parameters_menu.add_command(
+            label=MENU_SHOW_NFME,
             font=FONTS['DATA_FONT'],
-            command=lambda: self.show_selected_parameters("selected_columns")
+            command=lambda: self.show_parameters("NFME")
         )
-        currently_choosen_parameters.add_command(
-            label="Clear all parameters",
+        parameters_menu.add_command(
+            label=MENU_SHOW_COMPUTED,
             font=FONTS['DATA_FONT'],
-            command=lambda: self.clear_all_parameters("selected_columns")
-        )
-        currently_choosen_parameters.add_command(
-            label="Clear last parameter",
-            font=FONTS['DATA_FONT'],
-            command=self.clear_last_parameter
-        )
-
-        NFME_parameters = tk.Menu(self.menu_bar, tearoff=1)
-        self.menu_bar.add_cascade(
-            label="NFME parameters", menu=NFME_parameters
-        )
-
-        NFME_parameters.add_command(
-            label="Show selected parameters",
-            font=FONTS['DATA_FONT'],
-            command=lambda: self.show_selected_parameters("NFME_parameters")
-        )
-        NFME_parameters.add_command(
-            label="Clear all parameters",
-            font=FONTS['DATA_FONT'],
-            command=lambda: self.clear_all_parameters("NFME_parameters")
-        )
-
-        computed_parameters = tk.Menu(self.menu_bar, tearoff=1)
-        self.menu_bar.add_cascade(
-            label="Computed parameters", menu=computed_parameters
-        )
-
-        computed_parameters.add_command(
-            label="Show selected parameters",
-            font=FONTS['DATA_FONT'],
-            command=lambda: self.show_selected_parameters(
-                "computed_parameters"
-            )
-        )
-        computed_parameters.add_command(
-            label="Clear all parameters",
-            font=FONTS['DATA_FONT'],
-            command=lambda: self.clear_all_parameters("computed_parameters")
+            command=lambda: self.show_parameters("computed")
         )
 
         info = tk.Menu(self.menu_bar, tearoff=1)
@@ -808,8 +887,8 @@ class DRDH_module:
             menu=movement_menu
         )
 
-        # Starts empty: neither option is ticked until the user chooses
-        self.movement_type_var = tk.StringVar(value="")
+        # Empty until the user chooses (restored after BACK from processing)
+        self.movement_type_var = tk.StringVar(value=self.movement_type or "")
 
         for option in ("Withdrawal", "Insertion"):
             movement_menu.add_radiobutton(
@@ -827,231 +906,394 @@ class DRDH_module:
             command=self.clear_movement_type
         )
 
-    def show_selected_parameters(self, attr_name: str) -> None:
+    # ------------------------------------------------------------------
+    # "Parameters" windows
+    # ------------------------------------------------------------------
+    def _parameter_rows(self, kind: str) -> list[tuple[str, str, str]]:
+        """Rows (iid, parameter, columns / value) of a parameters window."""
+        if kind == "NFME":
+            return [
+                (key, key, ", ".join(self.parameter_columns.get(key, [])))
+                for key in self.NFME_parameters
+            ]
+        return [
+            (name, DRDH_COMPUTED_PARAMS[name]["title"],
+             str(self.computed_values[name]))
+            for name in self.computed_parameters
+            if name in self.computed_values
+        ]
+
+    def show_parameters(self, kind: str) -> None:
         """
-        Open a new window represents selected parameters for a given attribute.
+        Open a window with the parameters already obtained.
 
-        Args (given attributes):
-            attr_name (str): Name of attribute contains a set of selected
-            parameters. Among them: ('selected_columns', 'NFME_parameters',
-                             or 'computed_parameters').
+        Args:
+            kind (str): 'NFME' - parameter and the NFME column(s) assigned
+                to it; 'computed' - parameter and the value entered.
 
-            'selected_columns' means paremeters from NFME file currenlty
-            selected from one combobox parameter, "Get parameter" button
-            has not pressed yet.
-
-            'NFME_parameters' means the list of parameters, which has
-            already fixed via "Get parameter" button.
-
-            'computed_parameters' means parameters, entered via entry
-            fields
+        Rows are clickable. "Clear" removes the clicked parameter(s),
+        "Clear all" removes all of them. The window follows every change
+        of the state (including Ctrl+Z / Ctrl+Y).
         """
-        params = getattr(self, attr_name)
+        opened = self._param_windows.get(kind)
+        if opened and opened["window"].winfo_exists():
+            opened["window"].deiconify()
+            opened["window"].lift()
+            self._refresh_param_window(kind)
+            return
 
-        data_window = tk.Toplevel(self.root)
-        data_window.title('NFME parameters')
-        data_window.geometry("340x250")
-        data_window.config(bg=COLORS['BACKGROUND_COLOR'])
+        is_nfme = kind == "NFME"
+        window = tk.Toplevel(self.root)
+        window.title(
+            PARAMS_WINDOW_TITLE_NFME if is_nfme
+            else PARAMS_WINDOW_TITLE_COMPUTED
+        )
+        window.geometry(PARAMS_WINDOW_GEOMETRY)
+        window.config(bg=COLORS['BACKGROUND_COLOR'])
 
-        frame = tk.Frame(data_window)
+        style = ttk.Style(window)
+        row_font = tkfont.Font(root=window, font=FONTS['DATA_FONT'])
+        style.configure(
+            PARAMS_TREE_STYLE,
+            font=FONTS['DATA_FONT'],
+            rowheight=row_font.metrics("linespace") + PARAMS_ROW_PADDING
+        )
+        style.configure(f"{PARAMS_TREE_STYLE}.Heading", font=FONTS['DATA_FONT'])
+
+        frame = tk.Frame(window, bg=COLORS['BACKGROUND_COLOR'])
         frame.pack(
             fill=tk.BOTH, expand=True,
             padx=GAPS['GAPS_X']['PAD_X_10'],
             pady=GAPS['GAPS_Y']['PAD_Y_10'],
         )
-
         frame.grid_rowconfigure(0, weight=1)
         frame.grid_columnconfigure(0, weight=1)
-        frame.grid_columnconfigure(1, weight=1)
 
-        listbox = tk.Listbox(
+        tree = ttk.Treeview(
             frame,
-            selectmode=tk.MULTIPLE,
-            font=FONTS['DATA_FONT'],
-            bg=COLORS['PARAMETERS_BACKGROUND_COLOR']
+            columns=("parameter", "value"),
+            show="headings",
+            selectmode="extended",
+            style=PARAMS_TREE_STYLE
+        )
+        tree.heading("parameter", text=PARAMS_HEADINGS["parameter"])
+        tree.heading("value", text=PARAMS_HEADINGS[kind])
+        tree.column(
+            "parameter", width=PARAMS_COLUMN_WIDTH["parameter"], anchor="w"
+        )
+        tree.column(
+            "value", width=PARAMS_COLUMN_WIDTH["value"], anchor="w"
         )
 
-        for i, param in enumerate(params):
-            listbox.insert(i, param)
+        scrollbar = ttk.Scrollbar(
+            frame, orient="vertical", command=tree.yview
+        )
+        tree.configure(yscrollcommand=scrollbar.set)
+        tree.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
 
-        listbox.grid(row=0, column=0, columnspan=2, sticky='nswe')
-
-        button_frame = tk.Frame(data_window, bg=COLORS['BACKGROUND_COLOR'])
+        button_frame = tk.Frame(window, bg=COLORS['BACKGROUND_COLOR'])
         button_frame.pack(pady=5)
 
-        clear_all_parameters_button = SmallButtons(
-              button_frame,
-              text='Clear all parameters',
-              command=lambda: self.clear_all_parameters(attr_name, listbox),
-        )
-        clear_all_parameters_button.grid(
-            row=1, column=0,
-            padx=GAPS['GAPS_X']['PAD_X_10'],
-            pady=GAPS['GAPS_Y']['PAD_Y_0_5']
-        )
-
-        clear_selected_parameters_button = SmallButtons(
-              button_frame,
-              text='Clear selected parameters',
-              command=lambda: self.clear_selected_parameters(
-                  attr_name, listbox
-                ),
-        )
-        clear_selected_parameters_button.grid(
-            row=1, column=1,
-            padx=GAPS['GAPS_X']['PAD_X_10'],
-            pady=GAPS['GAPS_Y']['PAD_Y_0_5']
-        )
-
-    def clear_all_parameters(
-            self,
-            attr_name: str,
-            listbox: tk.Listbox = None
-    ) -> None:
-        """
-        Clear all parameters from a given attribute list and reset UI.
-
-        Args:
-            attr_name (str): Attribute name to clear.
-            listbox (tk.Listbox, optional): Related listbox to clear.
-        """
-        getattr(self, attr_name).clear()
-        if attr_name == 'NFME_parameters':
-            self.reset_parameters('NFME')
-            for columns in self.parameter_columns.values():
-                self.set_column_buttons_state(columns, disabled=False)
-            self.parameter_columns.clear()
-            self.clear_selected_column_buttons()
-
-            self.time_required_label.config(text="⏱ Time :1")
-            self.reactivity_required_label.config(text="⏱ Reactivity :2")
-            if self.groups_count == 12:
-                self.H12_position_required_label.config(text="⏱ H₁₂ :1")
-            else:
-                self.H12_position_required_label.config(text="⏱ H₁₀ :1")
-            self.boric_acid_start_required_label.config(
-                text="⏱ С(H₃BO₃) initial"
-            )
-            self.boric_acid_finish_required_label.config(
-                text="⏱ С(H₃BO₃) final"
-            )
-            if self.groups_count == 12:
-                self.H11_position_required_label.config(text="⏱ H₁₁ :1")
-                self.H10_position_required_label.config(text="⏱ H₁₀ :1")
-            else:
-                self.H11_position_required_label.config(text="")
-                self.H10_position_required_label.config(text="")
-            self.H9_position_required_label.config(text="⏱ H₉ :1")
-            self.H8_position_required_label.config(text="⏱ H₈ :1")
-            self.H7_position_required_label.config(text="⏱ H₇ :1")
-            self.H6_position_required_label.config(text="⏱ H₆ :1")
-            self.H5_position_required_label.config(text="⏱ H₅ :1")
-            self.H4_position_required_label.config(text="⏱ H₄ :1")
-            self.H3_position_required_label.config(text="⏱ H₃ :1")
-            self.H2_position_required_label.config(text="⏱ H₂ :1")
-            self.H1_position_required_label.config(text="⏱ H₁ :1")
-
-        elif attr_name == 'computed_parameters':
-            self.reset_parameters('computed')
-
-            self.DRDC_entry.delete(0, tk.END)
-            self.DRDC_required_label.config(text='⏱ DRDC')
-            self.boric_acid_finish_entry.delete(0, tk.END)
-            self.boric_acid_finish_required_label.config(
-                text='⏱ С(H₃BO₃) final'
-            )
-            self.boric_acid_start_entry.delete(0, tk.END)
-            self.boric_acid_start_required_label.config(
-                text='⏱ С(H₃BO₃) initial'
-            )
-
-        if listbox is not None:
-            listbox.delete(0, tk.END)
-
-    def clear_last_parameter(self) -> None:
-        """
-        Remove the last parameter from currently chosen NFME parameters.
-        """
-        if self.selected_columns:
-            _ = self.selected_columns.pop()
-
-    def clear_selected_parameters(
-            self,
-            attr_name: str,
-            listbox: tk.Listbox
-    ) -> None:
-        """
-        Clear selected parameters from a listbox and update UI.
-
-        Args:
-            attr_name (str): Attribute contains parameters.
-            listbox (tk.Listbox): Listbox widget contains selected items.
-        """
-        params = getattr(self, attr_name)
-        selected = listbox.curselection()
-
-        removed_params = []
-        for index in reversed(selected):
-            removed_params += [params[index]]
-            if attr_name == 'NFME_parameters':
-                removed_columns = self.parameter_columns.pop(
-                    params[index], None
+        def clear_clicked() -> None:
+            chosen = list(tree.selection())
+            if not chosen:
+                messagebox.showinfo(
+                    window.title(), PARAMS_HINT_SELECT, parent=window
                 )
-                if removed_columns:
-                    self.set_column_buttons_state(
-                        removed_columns, disabled=False
-                    )
-                if params[index].startswith(EXTRA_PREFIX):
-                    extra_name = params[index][len(EXTRA_PREFIX):]
-                    self.extra_parameters = [
-                        p for p in self.extra_parameters
-                        if p["name"] != extra_name
-                    ]
-            del params[index]
-            listbox.delete(index)
+                return
+            self.clear_parameters(kind, chosen)
 
-        if attr_name == 'NFME_parameters':
-            remaining_params = params
-            if 'Time' not in remaining_params:
-                self.time_required_label.config(text="⏱ Time :1")
+        SmallButtons(
+            button_frame,
+            text=PARAMS_BUTTON_CLEAR,
+            command=clear_clicked,
+        ).grid(
+            row=0, column=0,
+            padx=GAPS['GAPS_X']['PAD_X_10'],
+            pady=GAPS['GAPS_Y']['PAD_Y_0_5']
+        )
+        SmallButtons(
+            button_frame,
+            text=PARAMS_BUTTON_CLEAR_ALL,
+            command=lambda: self.clear_parameters(kind),
+        ).grid(
+            row=0, column=1,
+            padx=GAPS['GAPS_X']['PAD_X_10'],
+            pady=GAPS['GAPS_Y']['PAD_Y_0_5']
+        )
 
-            if 'Reactivity' not in remaining_params:
-                self.reactivity_required_label.config(text="⏱ Reactivity :2")
+        window.bind("<Control-KeyPress>", self._on_ctrl_key)
+        window.protocol(
+            "WM_DELETE_WINDOW", lambda: self._close_param_window(kind)
+        )
 
-            if 'Boric acid concentration' not in remaining_params:
-                self.boric_acid_NFME = None
-                self.boric_acid_NFME_required_label.config(text="⏱ Boric acid :2")
+        self._param_windows[kind] = {"window": window, "tree": tree}
+        self._refresh_param_window(kind)
 
-            for num, attr_name_group in GROUP_MAP.items():
-                param_name = f"{num} Group position"
+    def _refresh_param_window(self, kind: str) -> None:
+        """Redraw the rows of an open parameters window."""
+        opened = self._param_windows.get(kind)
+        if not opened:
+            return
+        if not opened["window"].winfo_exists():
+            self._param_windows.pop(kind, None)
+            return
 
-                if param_name not in remaining_params:
-                    setattr(self, attr_name_group, None)
+        tree: ttk.Treeview = opened["tree"]
+        previously_selected = set(tree.selection())
+        tree.delete(*tree.get_children())
+        for iid, parameter, value in self._parameter_rows(kind):
+            tree.insert("", "end", iid=iid, values=(parameter, value))
 
-                    label_attr = f"H{num}_position_required_label"
-                    label = getattr(self, label_attr, None)
-                    if label:
-                        label.config(text=f"⏱ H{num} :1")
+        keep = [i for i in previously_selected if tree.exists(i)]
+        if keep:
+            tree.selection_set(keep)
 
-        elif attr_name == 'computed_parameters':
+    def _close_param_window(self, kind: str) -> None:
+        opened = self._param_windows.pop(kind, None)
+        if opened and opened["window"].winfo_exists():
+            opened["window"].destroy()
 
-            for param in removed_params:
-                if param == 'DRDC':
-                    self.DRDC = None
-                    self.DRDC_required_label.config(text='⏱ DRDC')
-                    self.DRDC_entry.delete(0, tk.END)
-                elif param == 'boric_acid_start':
-                    self.boric_acid_start = None
-                    self.boric_acid_start_entry.delete(0, tk.END)
-                    self.boric_acid_start_required_label.config(
-                        text="⏱ С(H₃BO₃) initial"
-                    )
-                elif param == 'boric_acid_finish':
-                    self.boric_acid_finish = None
-                    self.boric_acid_finish_entry.delete(0, tk.END)
-                    self.boric_acid_finish_required_label.config(
-                        text="⏱ С(H₃BO₃) final"
-                    )
+    def close_parameter_windows(self) -> None:
+        """Close all open \"parameters\" windows."""
+        for kind in list(self._param_windows):
+            self._close_param_window(kind)
+
+    # ------------------------------------------------------------------
+    # Clearing
+    # ------------------------------------------------------------------
+    def clear_parameters(
+            self,
+            kind: str,
+            keys: Optional[list[str]] = None
+    ) -> None:
+        """
+        Clear obtained parameters and roll the UI back.
+
+        Args:
+            kind (str): 'NFME' or 'computed'.
+            keys (list[str], optional): Parameters to clear; all of this
+                kind if omitted.
+
+        NFME: the columns of the parameter are released (buttons are
+        unpressed and enabled again) and the label is reset.
+        Computed: the value is dropped, the entry gets its default again.
+        """
+        existing = (
+            list(self.NFME_parameters) if kind == "NFME"
+            else list(self.computed_parameters)
+        )
+        keys = existing if keys is None else [k for k in keys if k in existing]
+        if not keys:
+            return
+
+        self._push_undo()
+        for key in keys:
+            if kind == "NFME":
+                self._remove_nfme_parameter(key)
+            else:
+                self._remove_computed_parameter(key)
+        self.refresh_ui(sync_entries=True)
+
+    def _remove_nfme_parameter(self, key: str) -> None:
+        self.parameter_columns.pop(key, None)
+        if key.startswith(EXTRA_PREFIX):
+            extra_name = key[len(EXTRA_PREFIX):]
+            self.extra_parameters = [
+                p for p in self.extra_parameters if p["name"] != extra_name
+            ]
+        elif key in DRDH_NFME_PARAMS:
+            setattr(self, DRDH_NFME_PARAMS[key]["attr"], None)
+        if key in self.NFME_parameters:
+            self.NFME_parameters.remove(key)
+
+    def _set_computed(self, name: str, value: float) -> None:
+        setattr(self, DRDH_COMPUTED_PARAMS[name]["attr"], value)
+        self.computed_values[name] = value
+        if name not in self.computed_parameters:
+            self.computed_parameters.append(name)
+
+    def _remove_computed_parameter(self, name: str) -> None:
+        self.computed_values.pop(name, None)
+        # Group length and overlap go back to their defaults
+        setattr(
+            self, DRDH_COMPUTED_PARAMS[name]["attr"],
+            DRDH_COMPUTED_PARAMS[name]["default"]
+        )
+        if name in self.computed_parameters:
+            self.computed_parameters.remove(name)
+
+    # ------------------------------------------------------------------
+    # State: snapshot / undo / redo
+    # ------------------------------------------------------------------
+    def _snapshot(self) -> dict[str, Any]:
+        """Copy of everything the operator has chosen so far."""
+        params = {
+            key: (list(cols), getattr(self, DRDH_NFME_PARAMS[key]["attr"]))
+            for key, cols in self.parameter_columns.items()
+            if key in DRDH_NFME_PARAMS
+        }
+        return {
+            "order": list(self.NFME_parameters),
+            "params": params,
+            "extras": [
+                dict(p, columns=list(p["columns"]))
+                for p in self.extra_parameters
+            ],
+            "computed": dict(self.computed_values),
+            "selected": list(self.selected_columns),
+        }
+
+    def _apply_state(self, state: dict[str, Any]) -> None:
+        """Make the given snapshot current and redraw the UI."""
+        self.reset_parameters('NFME', 'computed')
+        self.parameter_columns.clear()
+        self.NFME_parameters = []
+        self.computed_values = {}
+        self.computed_parameters = []
+
+        extras = {p["name"]: p for p in state["extras"]}
+        for key in state["order"]:
+            if key.startswith(EXTRA_PREFIX):
+                extra = extras[key[len(EXTRA_PREFIX):]]
+                self.extra_parameters.append(
+                    dict(extra, columns=list(extra["columns"]))
+                )
+                self.parameter_columns[key] = list(extra["columns"])
+            else:
+                cols, series = state["params"][key]
+                setattr(self, DRDH_NFME_PARAMS[key]["attr"], series)
+                self.parameter_columns[key] = list(cols)
+            self.NFME_parameters.append(key)
+
+        for name, value in state["computed"].items():
+            self._set_computed(name, value)
+
+        self.selected_columns = list(state["selected"])
+        self.refresh_ui(sync_entries=True)
+
+    def _push_undo(self) -> None:
+        """Remember the current state; call right BEFORE changing it."""
+        self._undo_stack.append(self._snapshot())
+        if len(self._undo_stack) > UNDO_LIMIT:
+            del self._undo_stack[0]
+        self._redo_stack.clear()
+
+    def undo(self) -> None:
+        """Ctrl+Z: revert the last change of the parameters."""
+        if not self._undo_stack:
+            return
+        self._redo_stack.append(self._snapshot())
+        self._apply_state(self._undo_stack.pop())
+
+    def redo(self) -> None:
+        """Ctrl+Y: return the change reverted by Ctrl+Z."""
+        if not self._redo_stack:
+            return
+        self._undo_stack.append(self._snapshot())
+        self._apply_state(self._redo_stack.pop())
+
+    def _on_ctrl_key(self, event: tk.Event) -> Optional[str]:
+        """
+        Ctrl+Z / Ctrl+Y (Ctrl+Shift+Z too) for any keyboard layout.
+
+        On Windows the virtual key code is checked, so the shortcuts also
+        work with the Russian layout.
+        """
+        key = (event.keysym or "").lower()
+        code = event.keycode if sys.platform.startswith("win") else None
+        shift = bool(event.state & SHIFT_STATE_MASK)
+
+        if key in UNDO_KEYSYMS or code == UNDO_KEYCODE_WIN:
+            self.redo() if shift else self.undo()
+            return "break"
+        if key in REDO_KEYSYMS or code == REDO_KEYCODE_WIN:
+            self.redo()
+            return "break"
+        return None
+
+    def bind_undo_redo(self) -> None:
+        """Bind Ctrl+Z / Ctrl+Y to the window of the module."""
+        self.unbind_undo_redo()
+        self._ctrl_bind_id = self.root.winfo_toplevel().bind(
+            "<Control-KeyPress>", self._on_ctrl_key, add="+"
+        )
+
+    def unbind_undo_redo(self) -> None:
+        """Release the shortcuts (processing window, leaving the module)."""
+        if self._ctrl_bind_id:
+            try:
+                self.root.winfo_toplevel().unbind(
+                    "<Control-KeyPress>", self._ctrl_bind_id
+                )
+            except tk.TclError:
+                pass
+            self._ctrl_bind_id = None
+
+    # ------------------------------------------------------------------
+    # Drawing the state
+    # ------------------------------------------------------------------
+    def _nfme_label(self, param: str) -> Optional[tk.Label]:
+        """Label of an NFME parameter (None if it is not shown)."""
+        if self.groups_count == 10:
+            if param in ("12 Group position", "11 Group position"):
+                return None
+            if param == "10 Group position":
+                return self.H12_position_required_label
+        return getattr(self, DRDH_NFME_PARAMS[param]["label"], None)
+
+    def refresh_ui(self, sync_entries: bool = False) -> None:
+        """
+        Redraw the widgets from the stored state.
+
+        - column buttons: locked (pressed, disabled) when assigned to a
+          parameter, pressed when just selected, raised otherwise;
+        - labels of required parameters and of computed parameters;
+        - open "parameters" windows;
+        - entry fields (only if sync_entries, so that a value the operator
+          is typing is not overwritten by ordinary actions).
+        """
+        if self.DRDH_frame is None or not self.DRDH_frame.winfo_exists():
+            return
+
+        locked = {
+            col for cols in self.parameter_columns.values() for col in cols
+        }
+        for column_name, button in self.selected_column_buttons.items():
+            if not button.winfo_exists():
+                continue
+            if column_name in locked:
+                button.config(state=tk.DISABLED, relief=tk.SUNKEN, bd=2)
+            elif column_name in self.selected_columns:
+                button.config(state=tk.NORMAL, relief=tk.SUNKEN, bd=2)
+            else:
+                button.config(state=tk.NORMAL, relief=tk.RAISED, bd=2)
+
+        for param, info in DRDH_NFME_PARAMS.items():
+            label = self._nfme_label(param)
+            if label is None:
+                continue
+            text = info["text"]
+            if param in self.parameter_columns:
+                text = "✓" + text[1:]
+            label.config(text=text)
+
+        for name, info in DRDH_COMPUTED_PARAMS.items():
+            done = name in self.computed_values
+            getattr(self, info["label"]).config(
+                text=info["ok"] if done else info["text"]
+            )
+            if sync_entries:
+                entry = getattr(self, info["entry"])
+                entry.delete(0, tk.END)
+                if done:
+                    entry.insert(0, str(self.computed_values[name]))
+                elif info["default"] is not None:
+                    entry.insert(0, str(info["default"]))
+
+        for kind in list(self._param_windows):
+            self._refresh_param_window(kind)
 
     def start_DRDH(self) -> None:
         """
@@ -1109,143 +1351,31 @@ class DRDH_module:
             groups_str = None
             return
 
+        # Shortcuts and parameter windows must not touch the state while
+        # the processing window is open
+        self.unbind_undo_redo()
+        self.close_parameter_windows()
+
         self.DRDH_processing_interface = DRDH_processing(self.DRDH_frame, self)
         self.DRDH_processing_interface.create_DRDH_processing_window()
+
+    def _parameter_rules(self, param: str) -> tuple[int, tuple]:
+        """Expected number of columns and the allowed range of a parameter."""
+        if param == "Time":
+            return 1, RANGES_EXPECTED['TIME_RANGE']
+        if param == "Reactivity":
+            return 2, RANGES_EXPECTED['REACTIVITY_RANGE']
+        if param == "Boric acid concentration":
+            return 2, RANGES_EXPECTED['BORIC_ACID_RANGE']
+        return 1, RANGES_EXPECTED['GROUP_POSITION_RANGE']
 
     def get_parameter(self) -> None:
         """
         Obtain NFME parameter via buttons.
 
         Check whether the parameter complies with the requirements.
-        Updates corresponding attribute and UI label.
+        Updates corresponding attribute and UI (labels, locked buttons).
         """
-        PARAMETER_RULES: dict[str, dict[str, Any]] = {
-            "Time": {
-                "columns": 1,
-                "range": RANGES_EXPECTED['TIME_RANGE'],
-                "allow_exp": False,
-                "attr": "Time",
-                "label": lambda self: self.time_required_label,
-                "label_text": "✓ Time :1"
-            },
-            "Reactivity": {
-                "columns": 2,
-                "range": RANGES_EXPECTED['REACTIVITY_RANGE'],
-                "allow_exp": False,
-                "attr": "Reactivity",
-                "label": lambda self: self.reactivity_required_label,
-                "label_text": "✓ Reactivity :2"
-            },
-            "Boric acid concentration": {
-                "columns": 2,
-                "range": RANGES_EXPECTED['BORIC_ACID_RANGE'],
-                "allow_exp": False,
-                "attr": "boric_acid_NFME",
-                "label": lambda self: self.boric_acid_NFME_required_label,
-                "label_text": "✓ Boric acid :2"
-            },
-            "12 Group position": {
-                "columns": 1,
-                "range": RANGES_EXPECTED['GROUP_POSITION_RANGE'],
-                "allow_exp": False,
-                "attr": "H12_position",
-                "label": lambda self: self.H12_position_required_label,
-                "label_text": "✓ H₁₂ :1"
-            },
-            "11 Group position": {
-                "columns": 1,
-                "range": RANGES_EXPECTED['GROUP_POSITION_RANGE'],
-                "allow_exp": False,
-                "attr": "H11_position",
-                "label": lambda self: self.H11_position_required_label,
-                "label_text": "✓ H₁₁ :1"
-            },
-            "10 Group position": {
-                "columns": 1,
-                "range": RANGES_EXPECTED['GROUP_POSITION_RANGE'],
-                "allow_exp": False,
-                "attr": "H10_position",
-                "label": lambda self: (
-                    self.H12_position_required_label
-                    if self.groups_count == 10
-                    else self.H10_position_required_label
-                ),
-                "label_text": "✓ H₁₀ :1"
-            },
-            "9 Group position": {
-                "columns": 1,
-                "range": RANGES_EXPECTED['GROUP_POSITION_RANGE'],
-                "allow_exp": False,
-                "attr": "H9_position",
-                "label": lambda self: self.H9_position_required_label,
-                "label_text": "✓ H₉ :1"
-            },
-            "8 Group position": {
-                "columns": 1,
-                "range": RANGES_EXPECTED['GROUP_POSITION_RANGE'],
-                "allow_exp": False,
-                "attr": "H8_position",
-                "label": lambda self: self.H8_position_required_label,
-                "label_text": "✓ H₈ :1"
-            },
-            "7 Group position": {
-                "columns": 1,
-                "range": RANGES_EXPECTED['GROUP_POSITION_RANGE'],
-                "allow_exp": False,
-                "attr": "H7_position",
-                "label": lambda self: self.H7_position_required_label,
-                "label_text": "✓ H₇ :1"
-            },
-            "6 Group position": {
-                "columns": 1,
-                "range": RANGES_EXPECTED['GROUP_POSITION_RANGE'],
-                "allow_exp": False,
-                "attr": "H6_position",
-                "label": lambda self: self.H6_position_required_label,
-                "label_text": "✓ H₆ :1"
-            },
-            "5 Group position": {
-                "columns": 1,
-                "range": RANGES_EXPECTED['GROUP_POSITION_RANGE'],
-                "allow_exp": False,
-                "attr": "H5_position",
-                "label": lambda self: self.H5_position_required_label,
-                "label_text": "✓ H₅ :1"
-            },
-            "4 Group position": {
-                "columns": 1,
-                "range": RANGES_EXPECTED['GROUP_POSITION_RANGE'],
-                "allow_exp": False,
-                "attr": "H4_position",
-                "label": lambda self: self.H4_position_required_label,
-                "label_text": "✓ H₄ :1"
-            },
-            "3 Group position": {
-                "columns": 1,
-                "range": RANGES_EXPECTED['GROUP_POSITION_RANGE'],
-                "allow_exp": False,
-                "attr": "H3_position",
-                "label": lambda self: self.H3_position_required_label,
-                "label_text": "✓ H₃ :1"
-            },
-            "2 Group position": {
-                "columns": 1,
-                "range": RANGES_EXPECTED['GROUP_POSITION_RANGE'],
-                "allow_exp": False,
-                "attr": "H2_position",
-                "label": lambda self: self.H2_position_required_label,
-                "label_text": "✓ H₂ :1"
-            },
-            "1 Group position": {
-                "columns": 1,
-                "range": RANGES_EXPECTED['GROUP_POSITION_RANGE'],
-                "allow_exp": False,
-                "attr": "H1_position",
-                "label": lambda self: self.H1_position_required_label,
-                "label_text": "✓ H₁ :1"
-            },
-        }
-
         selected_param: str = self.selected_param.get()
 
         if selected_param == "Not selected":
@@ -1260,25 +1390,24 @@ class DRDH_module:
             self.add_extra_parameter()
             return
 
-        rules = PARAMETER_RULES[selected_param]
+        expected_columns, value_range = self._parameter_rules(selected_param)
 
-        if rules["columns"] is not None:
-            if len(self.selected_columns) > rules["columns"]:
-                response = Messages.show(
-                    "question",
-                    "COLUMNS_COUNT",
-                    param=selected_param,
-                    expected=rules["columns"],
-                    selected=len(self.selected_columns)
-                    )
-                if not response:
-                    self.clear_selected_column_buttons()
-                    return
+        if len(self.selected_columns) > expected_columns:
+            response = Messages.show(
+                "question",
+                "COLUMNS_COUNT",
+                param=selected_param,
+                expected=expected_columns,
+                selected=len(self.selected_columns)
+                )
+            if not response:
+                self.clear_selected_column_buttons()
+                return
 
         data: pd.DataFrame = self.df[self.selected_columns]
 
-        min_val, max_val = rules["range"]
-        allow_exp = rules["allow_exp"]
+        min_val, max_val = value_range
+        allow_exp = False
 
         for col in data.columns:
             series = data[col]
@@ -1330,21 +1459,17 @@ class DRDH_module:
             else data.iloc[:, 0]
         )
 
-        setattr(self, rules["attr"], result)
+        self._push_undo()
+        setattr(self, DRDH_NFME_PARAMS[selected_param]["attr"], result)
 
-        # Remember which NFME columns were assigned to this parameter.
+        # Remember which NFME columns were assigned to this parameter. If
+        # the parameter was already obtained, its old columns are released.
         self.parameter_columns[selected_param] = self.selected_columns.copy()
-
-        label = rules["label"](self)
-        label.config(text=rules["label_text"])
-
         if selected_param not in self.NFME_parameters:
             self.NFME_parameters.append(selected_param)
 
-        # Columns just assigned to a parameter become locked: visually
-        # and functionally unavailable until the parameter is cleared.
-        self.set_column_buttons_state(self.selected_columns, disabled=True)
         self.selected_columns.clear()
+        self.refresh_ui()
 
     def ask_extra_parameter_name(self) -> Optional[str]:
         """
@@ -1444,6 +1569,7 @@ class DRDH_module:
         )
 
         key = f"{EXTRA_PREFIX}{name}"
+        self._push_undo()
         self.extra_parameters.append(
             {"name": name, "values": result, "columns": columns}
         )
@@ -1451,57 +1577,9 @@ class DRDH_module:
         self.NFME_parameters.append(key)
 
         # Like for the other parameters, the columns become locked
-        self.set_column_buttons_state(columns, disabled=True)
         self.selected_columns.clear()
+        self.refresh_ui()
 
-    def reset_required_parameter_label(self, parameter: str) -> None:
-        """Reset a required parameter label and its assigned columns."""
-
-        self.parameter_columns.pop(parameter, None)
-
-        label_map = {
-            "Time": self.time_required_label,
-            "Reactivity": self.reactivity_required_label,
-            "Boric acid concentration": self.boric_acid_NFME_required_label,
-            "12 Group position": self.H12_position_required_label,
-            "11 Group position": self.H11_position_required_label,
-            "10 Group position": (
-                self.H12_position_required_label
-                if self.groups_count == 10
-                else self.H10_position_required_label
-            ),
-            "9 Group position": self.H9_position_required_label,
-            "8 Group position": self.H8_position_required_label,
-            "7 Group position": self.H7_position_required_label,
-            "6 Group position": self.H6_position_required_label,
-            "5 Group position": self.H5_position_required_label,
-            "4 Group position": self.H4_position_required_label,
-            "3 Group position": self.H3_position_required_label,
-            "2 Group position": self.H2_position_required_label,
-            "1 Group position": self.H1_position_required_label,
-        }
-
-        default_text = {
-            "Time": "⏱ Time :1",
-            "Reactivity": "⏱ Reactivity :2",
-            "Boric acid concentration": "⏱ Boric acid :2",
-            "12 Group position": "⏱ H₁₂ :1",
-            "11 Group position": "⏱ H₁₁ :1",
-            "10 Group position": "⏱ H₁₀ :1",
-            "9 Group position": "⏱ H₉ :1",
-            "8 Group position": "⏱ H₈ :1",
-            "7 Group position": "⏱ H₇ :1",
-            "6 Group position": "⏱ H₆ :1",
-            "5 Group position": "⏱ H₅ :1",
-            "4 Group position": "⏱ H₄ :1",
-            "3 Group position": "⏱ H₃ :1",
-            "2 Group position": "⏱ H₂ :1",
-            "1 Group position": "⏱ H₁ :1",
-        }
-
-        label = label_map.get(parameter)
-        if label:
-            label.config(text=default_text[parameter])
     def get_entry(self, entry, value_name: str) -> None:
         """
         Obtain a computed parameter via entry field.
@@ -1587,10 +1665,10 @@ class DRDH_module:
             self.reset_entry(entry)
             return
 
-        setattr(self, rules["attr"], numeric_value)
-        self.computed_parameters += [value_name]
-        label: tk.Label = rules["label"](self)
-        label.config(text=rules["label_text"])
+        if self.computed_values.get(value_name) != numeric_value:
+            self._push_undo()
+        self._set_computed(value_name, numeric_value)
+        self.refresh_ui()
 
     def get_button_name(self, button_name: str) -> None:
         """
@@ -1599,65 +1677,31 @@ class DRDH_module:
         Selected columns remain visually pressed until the parameter
         is assigned or the selection is cleared.
         """
+        locked = {
+            col for cols in self.parameter_columns.values() for col in cols
+        }
+        if button_name in locked:
+            return
+
+        self._push_undo()
         if button_name in self.selected_columns:
             self.selected_columns.remove(button_name)
-
-            button = self.selected_column_buttons.get(button_name)
-            if button:
-                button.config(
-                    relief=tk.RAISED,
-                    bd=2
-                )
         else:
             self.selected_columns.append(button_name)
-
-            button = self.selected_column_buttons.get(button_name)
-            if button:
-                button.config(
-                    relief=tk.SUNKEN,
-                    bd=2
-                )
+        self.refresh_ui()
 
     def clear_selected_column_buttons(self) -> None:
         """
-        Reset visual selection of currently selected NFME column buttons.
+        Reset the selection of NFME column buttons.
 
         Only touches columns picked but not yet assigned to a parameter
-        (self.selected_columns); buttons already locked to a parameter
-        are left untouched (see set_column_buttons_state).
+        (self.selected_columns); buttons locked to a parameter stay as
+        they are.
         """
-        for column_name in self.selected_columns:
-            button = self.selected_column_buttons.get(column_name)
-            if button:
-                button.config(
-                    relief=tk.RAISED,
-                    bd=2
-                )
-
-        self.selected_columns.clear()
-
-    def set_column_buttons_state(
-            self,
-            columns: list[str],
-            disabled: bool
-    ) -> None:
-        """
-        Enable or disable NFME column buttons for the given column names.
-
-        Args:
-            columns (list[str]): Column names to update.
-            disabled (bool): True to lock the buttons (column already
-                assigned to a parameter), False to make them clickable
-                again (parameter cleared).
-        """
-        for column_name in columns:
-            button = self.selected_column_buttons.get(column_name)
-            if not button:
-                continue
-            if disabled:
-                button.config(state=tk.DISABLED, relief=tk.SUNKEN, bd=2)
-            else:
-                button.config(state=tk.NORMAL, relief=tk.RAISED, bd=2)
+        if self.selected_columns:
+            self._push_undo()
+            self.selected_columns.clear()
+        self.refresh_ui()
 
     def reset_parameters(self, *args: str) -> None:
         """
@@ -1689,6 +1733,8 @@ class DRDH_module:
             self.DRDC = None
             self.boric_acid_start = None
             self.boric_acid_finish = None
+            self.Group_length = DRDH_COMPUTED_PARAMS["Group_length"]["default"]
+            self.overlap = DRDH_COMPUTED_PARAMS["Overlap"]["default"]
 
     def reset_entry(self, entry: ttk.Entry) -> None:
         """
@@ -1709,11 +1755,19 @@ class DRDH_module:
         Args:
             window (tk.Widget): DRDH frame to destroy.
         """
+        self.unbind_undo_redo()
+        self.close_parameter_windows()
+
         self.reset_parameters('NFME', 'computed')
         self.selected_columns = []
         self.NFME_parameters = []
         self.computed_parameters = []
+        self.computed_values = {}
         self.parameter_columns.clear()
+        self._undo_stack.clear()
+        self._redo_stack.clear()
+        self.groups_count = 12
+        self.movement_type = None
 
         if hasattr(self, 'root_window'):
             self.root_window.config(menu=None)
@@ -1733,6 +1787,7 @@ class DRDH_module:
 
         Adds scrollbars for both fields.
         """
+        self.selected_column_buttons.clear()
         self.header_frame = tk.Frame(
             self.DRDH_frame,
             bg=COLORS['BACKGROUND_COLOR'],
