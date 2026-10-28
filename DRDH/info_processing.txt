@@ -169,7 +169,7 @@ Menu "Plot":
                          (including the auxiliary parameters).
     Edit entries       - the list of auxiliary parameters: tick "Show" to
                          display one, edit the "Name" (it is used for the
-                         scale and in the legend), then press "Apply". Names
+                         scale and in the legend), then press "Submit". Names
                          must not be empty or repeated.
     Legend             - tick to show the legend on the plots, untick to hide
                          it. The legend lists the lines of the plot and the
@@ -204,10 +204,10 @@ columns are written to the saved files.
       columns are exported, with the units of the current settings.
     - Plot - see section 6.
     - Select mode - "Manual" (two clicks) or "Range" (drag), see section 3.
-    - Computed parameters -> "Edit parameters" opens a window for modifying
+    - Settings -> "Edit parameters" opens a window for modifying
       Group length, Overlap, DRDC and the boric acid concentrations without
       reverting to the parameter window. Overlap may be any number. After
-      "Apply" the DRDH plot (and its table) is redrawn.
+      "Submit" the DRDH plot (and its table) is redrawn.
     - Current_actions - the DRDH plot and the Current values window
       (sections 5 and 7).
     - INFO - this guide.
