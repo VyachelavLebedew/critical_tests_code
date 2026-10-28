@@ -353,7 +353,7 @@ class Main:
         value = value.replace(',', '.')
         try:
             beta: float = float(value)
-            if beta < 0:
+            if beta <= 0:
                 Messages.show("error", "VALUE_POSTIVE",
                               value='Beta', sign='positive')
                 window.lift()
