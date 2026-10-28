@@ -74,6 +74,32 @@ EDIT_ENTRIES_EMPTY_NAME = "A name must not be empty."
 EDIT_ENTRIES_DUPLICATE_NAME = "The name '{name}' is used twice."
 
 
+# ---------------------------------------------------------------------
+# New constants of the ITC point selection. Move them to Settings if needed.
+# ---------------------------------------------------------------------
+
+# Texts of the labels of the second point before it is selected
+ITC_POINT_LABELS = {
+    "R2": 'R₂ = _.____ Beff',
+    "T2": 'T₂ = ___._ °C',
+    "dR": 'dR = _.____ Beff',
+    "dT": 'dT = ___._ °C',
+}
+
+# Attributes of the second point (dropped when a new interval is started)
+ITC_SECOND_POINT_ATTRS = (
+    "point2", "finish_index", "R2_beta", "R2_percent", "T2", "H2",
+    "delta_R_beta", "delta_R_percent", "delta_T",
+)
+
+# What the results were computed from. Stored at Proceed, so that changing
+# the computed parameters recomputes ALL the rows of the table for the same
+# points, even if the points were moved meanwhile.
+ITC_RESULT_STATE_ATTRS = (
+    "start_index", "finish_index", "delta_R_percent", "delta_T", "H1",
+)
+
+
 class ITC_processing:
     """
     ITC_processing module to determine ITC.
@@ -271,7 +297,7 @@ class ITC_processing:
             padx=GAPS['GAPS_X']['PAD_X_10'],
         )
         self.R2_label = tk.Label(
-            self.ITC_processing_frame, text='R₂ = _.____ Beff',
+            self.ITC_processing_frame, text=ITC_POINT_LABELS['R2'],
             font=FONTS['TEXT_FONT'], bg=COLORS['BACKGROUND_COLOR']
         )
         self.R2_label.grid(
@@ -279,7 +305,7 @@ class ITC_processing:
             padx=GAPS['GAPS_X']['PAD_X_10'],
         )
         self.delta_R_label = tk.Label(
-            self.ITC_processing_frame, text='dR = _.____ Beff',
+            self.ITC_processing_frame, text=ITC_POINT_LABELS['dR'],
             font=FONTS['TEXT_FONT'], bg=COLORS['BACKGROUND_COLOR']
         )
         self.delta_R_label.grid(
@@ -295,7 +321,7 @@ class ITC_processing:
             padx=GAPS['GAPS_X']['PAD_X_10'],
         )
         self.T2_label = tk.Label(
-            self.ITC_processing_frame, text='T₂ = ___._ °C',
+            self.ITC_processing_frame, text=ITC_POINT_LABELS['T2'],
             font=FONTS['TEXT_FONT'], bg=COLORS['BACKGROUND_COLOR']
         )
         self.T2_label.grid(
@@ -303,7 +329,7 @@ class ITC_processing:
             padx=GAPS['GAPS_X']['PAD_X_10'],
         )
         self.delta_T_label = tk.Label(
-            self.ITC_processing_frame, text='dT = ___._ °C',
+            self.ITC_processing_frame, text=ITC_POINT_LABELS['dT'],
             font=FONTS['TEXT_FONT'], bg=COLORS['BACKGROUND_COLOR']
         )
         self.delta_T_label.grid(
@@ -352,29 +378,14 @@ class ITC_processing:
             self.Reactivity_change_unit.configure(
                 text='Reactivity is displayed as a: %'
             )
-            self.R1_label.config(
-                text=f'R₁ = {self.R1_percent:.{self.DECIMAL_REACT}f} %'
-            )
-            self.R2_label.config(
-                text=f'R₂ = {self.R2_percent:.{self.DECIMAL_REACT}f} %'
-            )
-            self.delta_R_label.config(
-                text=f'ΔR = {self.delta_R_percent:.{self.DECIMAL_REACT}f} %'
-            )
         else:
             self.checkbox_text.set("beta")
             self.Reactivity_change_unit.configure(
                 text='Reactivity is displayed as a: beta'
             )
-            self.R1_label.config(
-                text=f'R₁ = {self.R1_beta:.{self.DECIMAL_REACT}f} Beff'
-            )
-            self.R2_label.config(
-                text=f'R₂ = {self.R2_beta:.{self.DECIMAL_REACT}f} Beff'
-            )
-            self.delta_R_label.config(
-                text=f'ΔR = {self.delta_R_beta:.{self.DECIMAL_REACT}f} Beff'
-            )
+
+        # Only the labels of the points that already exist are rewritten
+        self.update_labels()
 
     def buttons(self):
         """
@@ -765,7 +776,12 @@ class ITC_processing:
         self.main_app.boric_acid = self.boric_acid
         self.main_app.DYDT = self.DYDT
 
-        self.update_table()
+        # The techniques, the deviations and the Result row all depend on
+        # these values, so the whole table is recomputed, not only Result
+        if hasattr(self, "results_state"):
+            self.recompute_results()
+        else:
+            self.update_table()
 
         if hasattr(self, "canvas"):
             self.canvas.draw_idle()
@@ -1267,7 +1283,47 @@ class ITC_processing:
         entry.bind('<Return>', lambda event: save_decimal())
 
     def proceed(self):
-        """Launch the computation."""
+        """
+        Launch the computation.
+
+        The points may lie anywhere until now (also in sections with a
+        different group position), so the position of the group is checked
+        here, not while the points are clicked.
+        """
+        if self.H1 != self.H2:
+            Messages.show("warning", "GROUP_MOVEMENT")
+            return
+
+        self.results_state = {
+            attr: getattr(self, attr) for attr in ITC_RESULT_STATE_ATTRS
+        }
+        self.compute_results()
+
+    def recompute_results(self) -> None:
+        """
+        Recompute every row of the table after the computed parameters
+        were changed. It uses the points of the last Proceed, not the ones
+        that may have been clicked since.
+        """
+        missing = object()
+        backup = {
+            attr: getattr(self, attr, missing)
+            for attr in ITC_RESULT_STATE_ATTRS
+        }
+        for attr, value in self.results_state.items():
+            setattr(self, attr, value)
+        try:
+            self.compute_results()
+        finally:
+            for attr, value in backup.items():
+                if value is missing:
+                    if hasattr(self, attr):
+                        delattr(self, attr)
+                else:
+                    setattr(self, attr, value)
+
+    def compute_results(self):
+        """Compute the three techniques, the errors and fill the table."""
         (
             self.itc1,
             self.mtc1,
@@ -2115,6 +2171,30 @@ class ITC_processing:
 
         self.Proceed_button.config(state="normal")
 
+    def reset_second_point(self) -> None:
+        """
+        Forget the end point (right click): its attributes, the line on all
+        plots and the labels; Proceed is disabled until a new one is set.
+        """
+        for attr in ITC_SECOND_POINT_ATTRS:
+            if hasattr(self, attr):
+                delattr(self, attr)
+
+        for plot in self.plot_windows:
+            if plot["vline_right"] is not None:
+                try:
+                    plot["vline_right"].remove()
+                except Exception:
+                    pass
+                plot["vline_right"] = None
+            plot["canvas"].draw_idle()
+
+        self.R2_label.config(text=ITC_POINT_LABELS["R2"])
+        self.T2_label.config(text=ITC_POINT_LABELS["T2"])
+        self.delta_R_label.config(text=ITC_POINT_LABELS["dR"])
+        self.delta_T_label.config(text=ITC_POINT_LABELS["dT"])
+        self.Proceed_button.config(state="disabled")
+
     def on_plot_click(self, event, ax1):
         """
         Proceed with mouse clicks on the plot.
@@ -2134,19 +2214,16 @@ class ITC_processing:
 
         idx = self.get_nearest_index(event.xdata)
         time_moment = self.times[idx]
-        H = float(self.Group_position[idx])
 
         if event.button == 1:
 
+            # A new interval that starts after the previous one (e.g. the
+            # heating after the cooling): the old end point does not belong
+            # to it any more, so it is dropped instead of an error
+            if hasattr(self, "point2") and time_moment >= self.point2[3]:
+                self.reset_second_point()
+
             if hasattr(self, "point2"):
-
-                if time_moment >= self.point2[3]:
-                    Messages.show("warning", "SECOND_EARLIER")
-                    return
-
-                if H != self.H2:
-                    Messages.show("warning", "GROUP_MOVEMENT")
-                    return
 
                 if (self.finish_index - idx) < self.min_points:
                     if not Messages.show("question", "NARROW_INTERVAL"):
@@ -2177,10 +2254,6 @@ class ITC_processing:
 
             if time_moment <= self.point1[3]:
                 Messages.show("warning", "SECOND_EARLIER")
-                return
-
-            if H != self.H1:
-                Messages.show("warning", "GROUP_MOVEMENT")
                 return
 
             if (idx - self.start_index) < self.min_points:
