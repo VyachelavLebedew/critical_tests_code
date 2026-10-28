@@ -38,32 +38,82 @@ Requirements:
 3. Assigning file columns
 
     1. Select a parameter in the combo box.
-    2. Click the button(s) of the required data column(s). The expected
-       number of columns is shown next to the parameter name.
-    3. Press "Get parameter" to confirm.
+    2. Click the button(s) of the required data column(s). A click selects the
+       column (the button stays pressed); a second click releases it.
+    3. Press "Get a parameter" to confirm.
     4. Select the next parameter.
 
-Parameters may be assigned in any order.
+Parameters may be assigned in any order. Each column is checked against the
+range expected for its parameter, so a column assigned to the wrong parameter
+is reported rather than silently accepted.
+
+The columns of an assigned parameter stay pressed and locked, so the same
+column cannot be taken twice. If a parameter is assigned again, its previous
+columns are released.
+
+4. Additional (auxiliary) parameters
+
+Any other file column can be shown on the plot of the processing window
+without being used in the computation (e.g. a flow rate or a level).
+
+    1. Select "Add new parameter" in the combo box.
+    2. Click the button(s) of the column(s).
+    3. Press "Get a parameter" and type a name for the parameter. The name is
+       used for its scale and in the legend; it must not be empty or repeated.
+
+If several columns are selected, you are asked to confirm: their mean is shown
+as ONE parameter on a single scale. Numbers with a decimal comma are accepted;
+empty cells are allowed. If you cancel the name dialog the columns stay
+selected, so you can repeat it.
+
+Any number of additional parameters can be added. In the processing window
+each one gets its own scale to the right of the others; they are switched on
+and off and renamed there (Plot -> Edit entries), and shown in the legend.
 
 
-4. Launching
+5. Launching
 
-Once all the required parameters are assigned and the values are entered,
-press "START" to run the computation.
-
-
-5. Menu
-
-    • Currently chosen buttons - view and remove the columns picked for the
-      current parameter (clear the last one, clear all, or open the list to
-      remove all or only the ones picked with the mouse).
-    • NFME parameters - view and release the parameters that already have
-      columns assigned.
-    • Computed parameters - view and clear the entered values.
+Press "START" once the mandatory parameters are set. If something is missing,
+the missing names are listed instead. The "Parameters" windows are closed and
+Ctrl+Z / Ctrl+Y are switched off while the processing window is open.
 
 
-6. Navigation
+6. Checking and correcting
 
-"BACK" returns to the main menu. The entered data is not preserved except the
-beta effective value and the loaded file; a new file may be loaded and beta
-may be reset.
+Menu "Parameters":
+
+    - Show NFME parameters - a table "parameter - column(s)" of everything
+      assigned so far, additional parameters included (they are shown as
+      "Added: name").
+    - Show computed parameters - a table "parameter - value" of the values
+      entered so far.
+
+Click a row to select it (several rows can be selected). "Clear" removes the
+selected parameter(s), "Clear all" removes all of them. For an NFME parameter
+its columns are released: the buttons are unpressed and enabled again, and
+the tick in front of the name disappears. For a computed parameter the value is
+dropped: the field returns to its default (the default Group length and
+Overlap, empty for the others) and the tick disappears. The windows follow every
+change, so they can stay open while you work.
+
+Ctrl+Z undoes and Ctrl+Y (or Ctrl+Shift+Z) redoes the last actions: picking
+a column, assigning or adding a parameter, entering a value, "Clear" and "Clear
+all". It works with any keyboard layout, also while the "Parameters" windows
+have the focus.
+
+7. Menu
+
+    - Parameters - the tables of the assigned and entered parameters
+      (section 6).
+    - INFO - this guide.
+
+8. Navigation
+
+"BACK" returns to the main menu. The selected columns, the entered values,
+the added parameters, the group mode, the movement type and the undo history
+are not preserved; the loaded file and the beta effective value are.
+
+If you come back to this window with "BACK" of the processing window,
+everything is exactly as you left it: the pressed buttons, the ticks, the
+entered values, the additional parameters, the group mode and the movement
+type. The parameters can be corrected and the determination repeated.
