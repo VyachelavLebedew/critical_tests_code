@@ -19,6 +19,10 @@ and the formulas are described in the General manual.
     7. Repeat for each group movement.
     8. When the last step is measured, press "Complete".
 
+Instead of two clicks per line you can drag a range (menu "Select mode",
+section 3). Instead of the buttons "Fix 1", "Fix 2" and "Proceed" you can
+press Enter.
+
 The hint in the lower-right corner always shows what is expected next.
 
 
@@ -26,38 +30,62 @@ The hint in the lower-right corner always shows what is expected next.
 
 On the left is the experiment plot: reactivity as a solid dark-blue line
 (left axis) and the group positions as dashed colored lines (right axis).
-The plot scale can be adjusted using the mouse wheel.  On the right is 
-the results table. The splitter between them adjusts their size.
+Auxiliary parameters, if you added any in the parameter window, have their own
+scales to the right of the others (section 6). The plot scale can be adjusted
+using the mouse wheel. On the right is the results table. The splitter between
+them adjusts their size.
 
 Colors on the plot:
-    • Amber line - the interval line being defined right now
-    • Amber dots - the two points that line is built through
-    • Dark line  - an interval line already measured
-    • Red vertical line - the moment the group starts moving
-    • Green dots - where the interval lines cross the red line
+    - Amber line - the interval line being defined right now
+    - Amber dots - the two points that line is built through
+    - Amber band - the range dragged in the "Range" select mode
+    - Dark line  - an interval line already measured
+    - Red vertical line - the moment the group starts moving
+    - Green dots - where the interval lines cross the red line
 
 
 3. Marking a step
 
-Each interval line needs two clicks: left-click for the first point, right-
-click for the second (later in time). The line is drawn through both points.
-If a group moves between the two clicks, the selection is rejected and the
-movement is reported.
+Each interval line is defined in one of two ways. The way is chosen in the
+menu "Select mode"; the default is "Manual".
+
+    Manual - two clicks: left-click for the first point, right-click for the
+             second (later in time). The line is drawn through both points.
+    Range  - one drag with the left mouse button over the steady section.
+             The line is the least-squares fit through ALL the points of the
+             range. At least 3 points are needed.
+
+If a group moves between the two clicks (or inside the dragged range), the
+selection is rejected and the movement is reported. A line is either two
+points or a range, never a mix of both; changing the mode drops the line that
+is being selected right now.
 
 "Fix 1" and "Fix 2" confirm the first and the second line; a line cannot be
-fixed before both of its points are set.
-
-After "Fix 2" the red vertical marker appears. Move it with a click or with
-the Left/Right arrow keys (the plot must have the keyboard focus) so that it
-spans the movement; otherwise the step is not accepted.
+fixed before it is defined. After "Fix 2" the red vertical marker appears.
+Move it with a click or with the Left/Right arrow keys (the plot must have the
+keyboard focus) so that it spans the movement; otherwise the step is not
+accepted.
 
 "Proceed" computes the step and adds a row. Confirm with "Yes" to keep it, or
 "No" to remove it and re-select the second line. The second line then becomes
 the first line of the next step, so the intervals stay continuous: press
 "Fix 1" to accept it and continue.
 
-If one or more group movements are incorrectly measured, click 
-"Remove previous step" to revert to the previous step.
+Enter does what the current stage waits for: "Fix 1", "Fix 2" or "Proceed".
+(Enter typed into an entry field belongs to that field.)
+
+Only one group defines the step: the group whose displacement is the
+denominator of the DRDH. If several groups moved, it is the one that moved
+clearly farther; if they moved equally, the one that started first. It is
+shown in the "Reference group" column of the saved table.
+
+The first row of the table holds the group positions of the very first sample
+of the record. If the determination starts later, the program warns once
+that these positions do not match the beginning of the first measured
+interval and offers to rewrite that row.
+
+If one or more group movements are incorrectly measured, click "Remove
+previous step" to revert to the previous step.
 
 
 4. Finishing - the DRDC
@@ -68,44 +96,127 @@ values entered in the previous window and from the file. A method whose data
 is missing is skipped. The block appears below the results table.
 
 
-5. Extra views
+5. DRDH plot (Current_actions -> DRDH plot)
+
+The differential worth versus group position, with 2-sigma error bars. Every
+measurement appears on it immediately; it can be opened at any moment.
+
+The horizontal axis is common for all the groups. It is a "telescope" pulled
+out from the group that starts moving first; under it every moving group has
+its own 0..100 % ruler. The next group starts when the previous one stands at
+the "Overlap" mark of ITS ruler (e.g. with an overlap of 25 the second group
+starts when the first reads 25). The overlap changes only the placing of the
+points on this axis, never the measured values. It can be any number - also
+more than 100 or below zero.
+
+Buttons of the window:
+
+    Save plot  - saves the picture (PNG or PDF).
+    Save data  - saves the table (below) as a tab-separated text file.
+    Show table - shows the same table on the screen (below).
+    Load album data - loads the calculated (album) DRDH, see below.
+
+Album data. "Load album data" reads an Excel file (the first sheet, the first
+row holds the column names). A window asks which column holds the position
+of every group and which one the DRDH. The calculated curve is drawn under the
+measured points, so the calculation and the experiment can be compared. The
+calculation is placed on the axis from its own table (the handover of the
+calculation is found in the table), not from the overlap. Where the groups of
+the table do not join, the curve is broken instead of a false straight line.
+"Delete album data" removes it.
+
+"Interpolate" adds the album curve taken at the positions of the measured
+steps, so that the calculation and the experiment can be compared point by
+point. It is recomputed with every change (new steps, a new overlap) until
+you press "Remove interpolation". Positions that lie outside the calculated
+curve, or in its break, are left blank.
+
+The table ("Show table" / "Save data"). All the data share one position
+column - the common axis, sorted ascending. Then follow:
+
+    H.. mean position   - positions of ALL the groups at a measured step (the
+                          mean of the start and the end of the step). They do
+                          not depend on the overlap.
+    Album H.. position  - positions of the groups in the album row (for the
+                          interpolated value: interpolated the same way).
+    DRDH, +/- sigma, Reference group - the measured step.
+    Album DRDH          - the calculated DRDH.
+    Album interpolated DRDH - after "Interpolate".
+
+A cell is blank where there is nothing at that position. To check on the spot
+whether the handover of the movement agrees, compare the group positions of
+the measured steps with the album ones, and the measured DRDH with the
+interpolated album DRDH.
+
+The window "Show table" is refreshed by itself whenever something changes:
+the overlap, new or removed steps, the album data, the interpolation, the
+decimals. The scroll position and the selected rows are kept. Ctrl+C copies the
+selected rows (all rows if none is selected) with the headings - ready to be
+pasted into Excel; it works with any keyboard layout. The window closes
+together with the DRDH plot.
+
+
+6. Auxiliary parameters, legend and other plot tools
+
+Columns added in the parameter window with "Add new parameter" are not used in
+the computation: they are only drawn on the plot, each on its own scale on the
+right, with the name you gave it. The extended cursor shows their values too.
+
+Menu "Plot":
+
+    Plot in new window - opens a synchronized enlarged copy.
+    Extended cursor    - toggles the crosshair with the current values
+                         (including the auxiliary parameters).
+    Edit entries       - the list of auxiliary parameters: tick "Show" to
+                         display one, edit the "Name" (it is used for the
+                         scale and in the legend), then press "Apply". Names
+                         must not be empty or repeated.
+    Legend             - tick to show the legend on the plots, untick to hide
+                         it. The legend lists the lines of the plot and the
+                         visible auxiliary parameters.
+
+
+7. Other views
 
 Under "Current_actions":
-    • "DRDH plot" - the differential worth versus group position, with 2-sigma
-      error bars; every measurement appears on it immediately. Its own two
-      buttons save the picture (PNG/PDF) or the data (text).
-    • "Current values" - an auxiliary window with the parameters of both lines
+    - "DRDH plot" - see section 5.
+    - "Current values" - an auxiliary window with the parameters of both lines
       and the live result at the red line; it updates as the marker is moved.
 
 
-6. Checkboxes below the plot
+8. Checkboxes below the plot
 
-    • Reactivity units - switches every displayed reactivity between Beff and
+    - Reactivity units - switches every displayed reactivity between Beff and
       %, including the table, the DRDC block and the "Current values" window.
-    • Mean group position column - shows or hides the per-group mean-position
+    - Mean group position column - shows or hides the per-group mean-position
       columns. The data is kept either way.
 
 The current state of each is written next to its checkbox. Only visible
 columns are written to the saved files.
 
 
-7. Menu
+9. Menu
 
-    • Decimal - the number of decimal places for the DRDC, reactivity, group
-      position, DRDH and boric acid concentration.
-    • Save - saves the results table as .xlsx or .txt. The "Save" button asks
+    - Decimal - the number of decimal places for the DRDC, reactivity, group
+      position, DRDH and boric acid concentration. The DRDH table follows it.
+    - Save - saves the results table as .xlsx or .txt. The "Save" button asks
       for the format first; the menu items save directly. Only visible
       columns are exported, with the units of the current settings.
-    • Plot - "Plot in new window" opens a synchronized enlarged copy;
-      "Extended cursor" toggles the crosshair with the current values.
-    • Current_actions - the DRDH plot and the Current values window (section 5).
-    • Computed parameters - "Edit computed parameters" opens a window for
-      modifying the calculated parameters without reverting to the parameter 
-      window.
-    • INFO - this guide.
+    - Plot - see section 6.
+    - Select mode - "Manual" (two clicks) or "Range" (drag), see section 3.
+    - Computed parameters -> "Edit parameters" opens a window for modifying
+      Group length, Overlap, DRDC and the boric acid concentrations without
+      reverting to the parameter window. Overlap may be any number. After
+      "Apply" the DRDH plot (and its table) is redrawn.
+    - Current_actions - the DRDH plot and the Current values window
+      (sections 5 and 7).
+    - INFO - this guide.
 
 
-8. Navigation
+10. Navigation
 
-"BACK" returns to the parameter window. All entered data is preserved, so the
-parameters can be corrected and the determination repeated.
+"BACK" returns to the parameter window. All entered data is preserved: the
+selected columns, the entered values and the added parameters are shown there
+exactly as you left them, so the parameters can be corrected and the
+determination repeated. In the parameter window Ctrl+Z and Ctrl+Y undo and
+redo the changes.
