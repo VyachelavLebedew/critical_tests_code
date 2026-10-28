@@ -69,7 +69,7 @@ EDIT_ENTRIES_EMPTY_TEXT = (
     "'Add new parameter'."
 )
 EDIT_ENTRIES_HEADINGS = ("Show", "Name")
-EDIT_ENTRIES_APPLY = "Apply"
+EDIT_ENTRIES_APPLY = "Submit"
 EDIT_ENTRIES_CANCEL = "Cancel"
 EDIT_ENTRIES_CLOSE = "Close"
 EDIT_ENTRIES_EMPTY_NAME = "A name must not be empty."
@@ -297,7 +297,7 @@ class PCR_processing:
         settings = tk.Menu(self.menu_bar, tearoff=0)
         self.menu_bar.add_cascade(label="Settings", menu=settings)
         settings.add_command(
-            label="Computed parameters",
+            label="Settings",
             font=FONTS['DATA_FONT'],
             command=self.open_experiment_parameters
         )
@@ -641,7 +641,7 @@ class PCR_processing:
 
         self.apply_parameters_button = TestButtons(
             button_frame,
-            text="Apply",
+            text="Submit",
             command=self.apply_experiment_parameters,
         )
         self.apply_parameters_button.grid(
@@ -1211,7 +1211,7 @@ class PCR_processing:
     def edit_entries(self) -> None:
         """
         Window to rename the auxiliary parameters and to switch them on
-        and off (check boxes). The plots are updated on "Apply".
+        and off (check boxes). The plots are updated on "Submit".
         """
         if self.widget_alive(getattr(self, "edit_entries_window", None)):
             self.edit_entries_window.lift()

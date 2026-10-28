@@ -876,7 +876,7 @@ class DRDH_processing:
             tearoff=1
         )
         self.menu_bar.add_cascade(
-            label="Computed parameters",
+            label="Settings",
             menu=experiment_parameters
         )
 
@@ -977,7 +977,7 @@ class DRDH_processing:
 
         self.apply_parameters_button = TestButtons(
             button_frame,
-            text="Apply",
+            text="Submit",
             command=self.apply_experiment_parameters,
         )
         self.apply_parameters_button.grid(
@@ -2918,7 +2918,7 @@ class DRDH_processing:
     def edit_entries(self) -> None:
         """
         Window to rename the auxiliary parameters and to switch them on
-        and off (check boxes). The plots are updated on "Apply".
+        and off (check boxes). The plots are updated on "Submit".
         """
         if self.widget_alive(getattr(self, "edit_entries_window", None)):
             self.edit_entries_window.lift()
@@ -3005,7 +3005,7 @@ class DRDH_processing:
         if self.extra_parameters:
             TestButtons(
                 button_frame,
-                text="Apply",
+                text="Submit",
                 command=self.apply_edit_entries
             ).grid(row=0, column=0, padx=GAPS['GAPS_X']['PAD_X_5'])
 

@@ -61,7 +61,7 @@ EDIT_ENTRIES_EMPTY_TEXT = (
     "'Add new parameter'."
 )
 EDIT_ENTRIES_HEADINGS = ("Show", "Name")
-EDIT_ENTRIES_APPLY = "Apply"
+EDIT_ENTRIES_APPLY = "Submit"
 EDIT_ENTRIES_CANCEL = "Cancel"
 EDIT_ENTRIES_CLOSE = "Close"
 EDIT_ENTRIES_EMPTY_NAME = "A name must not be empty."
@@ -151,7 +151,7 @@ class Imax_processing:
         )
 
         computed = tk.Menu(self.menu_bar, tearoff=1)
-        self.menu_bar.add_cascade(label='Computed parameters', menu=computed)
+        self.menu_bar.add_cascade(label='Settings', menu=computed)
         computed.add_command(
             label='Show computed parameters', font=FONTS['DATA_FONT'],
             command=self.show_computed_parameters
@@ -498,7 +498,7 @@ class Imax_processing:
     def edit_entries(self) -> None:
         """
         Window to rename the auxiliary parameters and to switch them on
-        and off (check boxes). The plots are updated on "Apply".
+        and off (check boxes). The plots are updated on "Submit".
         """
         if self.widget_alive(getattr(self, "edit_entries_window", None)):
             self.edit_entries_window.lift()
