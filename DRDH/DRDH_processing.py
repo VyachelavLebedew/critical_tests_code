@@ -8,6 +8,7 @@ from openpyxl.utils import get_column_letter
 import tkinter as tk
 from tkinter import ttk
 from tkinter import filedialog, messagebox
+from tkinter import font as tkfont
 
 import matplotlib as mpl
 from matplotlib.backends.backend_tkagg import (
@@ -83,6 +84,18 @@ EXTRA_COLORS = (
 LEGEND_LOCATION = "upper left"
 LEGEND_FRAME_ALPHA = 0.85
 LEGEND_MAX_ROWS = 6   # more entries are split into several columns
+
+# "Show table" of the DRDH plot (the same table that "Save data" writes)
+DRDH_TABLE_BUTTON_TEXT = "Show table"
+DRDH_TABLE_TITLE = "DRDH table"
+DRDH_TABLE_GEOMETRY = "1000x420"
+DRDH_TABLE_STYLE = "DrdhTable.Treeview"
+DRDH_TABLE_ROW_PADDING = 6          # added to the font height of a row
+DRDH_TABLE_COLUMN_PADDING = 24      # added to the width of a heading (px)
+DRDH_TABLE_MIN_COLUMN_WIDTH = 80    # px
+DRDH_TABLE_EMPTY_TEXT = "No DRDH results yet."
+DRDH_TABLE_COPY_KEYSYMS = ("c", "cyrillic_es")   # Ctrl+C, any layout
+DRDH_TABLE_COPY_KEYCODE_WIN = 67
 
 
 class DRDH_processing:
@@ -321,7 +334,9 @@ class DRDH_processing:
               also for a group that starts from 4 %, or from any other
               position, instead of the very end of its stroke.
 
-        The overlap shapes nothing but the abscissa of this plot. The rulers
+        The overlap may have any value (also more than 100 or below zero:
+        the groups then simply start earlier / later than at the ends of the
+        rulers). It shapes nothing but the abscissa of this plot. The rulers
         of the following groups may lie to the left or to the right of the
         leading one, depending on the direction of the movement, so the
         offsets are not shifted to be positive: that would move the leading
@@ -330,7 +345,7 @@ class DRDH_processing:
         if not self.moving_order:
             return {}
 
-        overlap = min(max(self.overlap, 0.0), 100.0)
+        overlap = self.overlap
 
         offsets = {self.moving_order[0]: 0.0}
 
@@ -1084,24 +1099,6 @@ class DRDH_processing:
             )
             return
 
-        if values["overlap"] < 0:
-            Messages.show(
-                "error",
-                "VALUE_POSTIVE",
-                value="Overlap",
-                sign="positive"
-            )
-            return
-
-        if values["overlap"] > 100:
-            Messages.show(
-                "error",
-                "VALUE_ERROR",
-                value_name="Overlap",
-                error="Overlap must not exceed 100 %"
-            )
-            return
-
         if values["DRDC"] is not None and values["DRDC"] > 0:
             Messages.show(
                 "error",
@@ -1227,6 +1224,15 @@ class DRDH_processing:
             side=tk.LEFT, padx=GAPS['GAPS_X']['PAD_X_10'], pady=5
         )
 
+        self.show_drdh_table_button = SmallButtons(
+            buttons_frame,
+            text=DRDH_TABLE_BUTTON_TEXT,
+            command=self.show_drdh_table,
+        )
+        self.show_drdh_table_button.pack(
+            side=tk.LEFT, padx=GAPS['GAPS_X']['PAD_X_10'], pady=5
+        )
+
         self.load_album_data_button = SmallButtons(
             buttons_frame,
             text="Load album data",
@@ -1320,15 +1326,15 @@ class DRDH_processing:
 
         return [groups.get(name) for name in self.Group_names]
 
-    def save_drdh_data(self):
+    def get_drdh_table(self):
         """
-        Save the points of the DRDH plot as a tab separated text file, so
-        that the curve can be replotted in any other program.
+        The table of the DRDH plot: the very one that "Save data" writes and
+        "Show table" shows.
 
         All the data share ONE position column (the common axis of the
         plot), sorted ascending. Right after it come the positions of every
         group - the real ones, which do not depend on the overlap - so that
-        the handover between the groups can be plotted:
+        the handover between the groups can be checked:
           - H.. mean position - the groups at a measured step (the mean of
             the start and the end of the step);
           - Album H.. position - the groups of the album table row (for the
@@ -1336,6 +1342,10 @@ class DRDH_processing:
         Then follow the measured DRDH with its error, the album DRDH and,
         after "Interpolate", the album DRDH interpolated at the measured
         step. A cell is blank where there is nothing at that position.
+
+        Returns:
+            (header, rows) - list of headings and list of rows of strings;
+            None if there is nothing to show.
         """
         self.refresh_drdh_abscissas()
         points = [p for p in self.drdh_points if p["u"] is not None]
@@ -1346,20 +1356,7 @@ class DRDH_processing:
         )
 
         if not points and not album_points:
-            Messages.show("warning", "NO_DRDH_RESULTS")
-            return
-
-        initial_dir = os.path.dirname(os.path.abspath(__file__))
-
-        filename = filedialog.asksaveasfilename(
-            initialdir=initial_dir,
-            defaultextension=".txt",
-            filetypes=[("Text files", "*.txt")],
-            title="Save DRDH plot data"
-        )
-
-        if not filename:
-            return
+            return None
 
         factor = DRDH_ERROR['SIGMA_FACTOR']
         album_groups = (
@@ -1430,47 +1427,234 @@ class DRDH_processing:
         if interpolate:
             header.append("Album interpolated DRDH, pcm/cm")
 
+        lines = []
+
+        for r in rows:
+            p = r["exp"]
+            line = [fmt(r["u"], self.DECIMAL_GROUP)]
+
+            if p is not None:
+                line += [
+                    fmt(v, self.DECIMAL_GROUP)
+                    for v in self.experiment_group_positions(p)
+                ]
+            else:
+                line += [""] * len(self.Group_names)
+
+            album_pos = r["album_pos"] or {}
+            line += [
+                fmt(album_pos.get(gi), self.DECIMAL_GROUP)
+                for gi in album_groups
+            ]
+
+            if p is not None:
+                line += [
+                    fmt(p["DRDH"], self.DECIMAL_DRDH),
+                    fmt(p["sigma"] * factor, self.DECIMAL_DRDH),
+                    str(p["ref_group"] or "")
+                ]
+            else:
+                line += [""] * 3
+
+            if album_points:
+                line.append(fmt(r["album"], self.DECIMAL_DRDH))
+
+            if interpolate:
+                line.append(fmt(r["interp"], self.DECIMAL_DRDH))
+
+            lines.append(line)
+
+        return header, lines
+
+    def save_drdh_data(self):
+        """
+        Save the points of the DRDH plot as a tab separated text file, so
+        that the curve can be replotted in any other program. The content is
+        the table of get_drdh_table (the same as in "Show table").
+        """
+        table = self.get_drdh_table()
+
+        if table is None:
+            Messages.show("warning", "NO_DRDH_RESULTS")
+            return
+
+        header, lines = table
+
+        initial_dir = os.path.dirname(os.path.abspath(__file__))
+
+        filename = filedialog.asksaveasfilename(
+            initialdir=initial_dir,
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt")],
+            title="Save DRDH plot data"
+        )
+
+        if not filename:
+            return
+
         with open(filename, "w", encoding="utf-8") as f:
             f.write("\t".join(header) + "\n")
 
-            for r in rows:
-                p = r["exp"]
-                line = [fmt(r["u"], self.DECIMAL_GROUP)]
-
-                if p is not None:
-                    line += [
-                        fmt(v, self.DECIMAL_GROUP)
-                        for v in self.experiment_group_positions(p)
-                    ]
-                else:
-                    line += [""] * len(self.Group_names)
-
-                album_pos = r["album_pos"] or {}
-                line += [
-                    fmt(album_pos.get(gi), self.DECIMAL_GROUP)
-                    for gi in album_groups
-                ]
-
-                if p is not None:
-                    line += [
-                        fmt(p["DRDH"], self.DECIMAL_DRDH),
-                        fmt(p["sigma"] * factor, self.DECIMAL_DRDH),
-                        str(p["ref_group"] or "")
-                    ]
-                else:
-                    line += [""] * 3
-
-                if album_points:
-                    line.append(fmt(r["album"], self.DECIMAL_DRDH))
-
-                if interpolate:
-                    line.append(fmt(r["interp"], self.DECIMAL_DRDH))
-
+            for line in lines:
                 f.write("\t".join(line) + "\n")
 
     # ------------------------------------------------------------------
-    # Album data: the calculated DRDH, to be compared with the experiment
+    # Table of the DRDH plot ("Show table")
     # ------------------------------------------------------------------
+    def show_drdh_table(self) -> None:
+        """
+        Open the table that "Save data" would write, to check on the spot
+        whether the handover of the movement agrees (the group positions at
+        the measured steps, the album positions, the DRDH and the
+        interpolated album DRDH side by side).
+
+        The table follows every change: the overlap, new or deleted steps,
+        the album data, the interpolation, the decimals.
+        """
+        if self.widget_alive(getattr(self, "drdh_table_window", None)):
+            self.drdh_table_window.deiconify()
+            self.drdh_table_window.lift()
+            self.refresh_drdh_table_window()
+            return
+
+        parent = getattr(self, "drdh_plot_window", self.root)
+        win = tk.Toplevel(parent)
+        win.title(DRDH_TABLE_TITLE)
+        win.geometry(DRDH_TABLE_GEOMETRY)
+        self.drdh_table_window = win
+        win.protocol("WM_DELETE_WINDOW", self.close_drdh_table_window)
+
+        style = ttk.Style(win)
+        self.drdh_table_font = tkfont.Font(root=win, font=FONTS['DATA_FONT'])
+        style.configure(
+            DRDH_TABLE_STYLE,
+            font=FONTS['DATA_FONT'],
+            rowheight=(
+                self.drdh_table_font.metrics("linespace")
+                + DRDH_TABLE_ROW_PADDING
+            )
+        )
+        style.configure(f"{DRDH_TABLE_STYLE}.Heading", font=FONTS['DATA_FONT'])
+
+        frame = tk.Frame(win)
+        frame.pack(fill=tk.BOTH, expand=True)
+        frame.grid_rowconfigure(0, weight=1)
+        frame.grid_columnconfigure(0, weight=1)
+
+        tree = ttk.Treeview(
+            frame, show="headings", selectmode="extended",
+            style=DRDH_TABLE_STYLE
+        )
+        y_scroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+        x_scroll = ttk.Scrollbar(
+            frame, orient="horizontal", command=tree.xview
+        )
+        tree.configure(
+            yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set
+        )
+        tree.grid(row=0, column=0, sticky="nsew")
+        y_scroll.grid(row=0, column=1, sticky="ns")
+        x_scroll.grid(row=1, column=0, sticky="ew")
+
+        self.drdh_table_tree = tree
+        self.drdh_table_empty_label = tk.Label(
+            frame, text=DRDH_TABLE_EMPTY_TEXT, font=FONTS['DATA_FONT']
+        )
+
+        win.bind("<Control-KeyPress>", self.on_drdh_table_ctrl_key)
+        self.refresh_drdh_table_window()
+
+    def refresh_drdh_table_window(self) -> None:
+        """
+        Refill the open table; does nothing if it is closed. The scroll
+        position and the selected rows are kept.
+        """
+        win = getattr(self, "drdh_table_window", None)
+
+        if not self.widget_alive(win):
+            return
+
+        tree = self.drdh_table_tree
+        table = self.get_drdh_table()
+
+        top = tree.yview()[0]
+        selected = [tree.index(item) for item in tree.selection()]
+        tree.delete(*tree.get_children())
+
+        if table is None:
+            tree["columns"] = ()
+            self.drdh_table_empty_label.place(relx=0.5, rely=0.5, anchor="center")
+            return
+
+        self.drdh_table_empty_label.place_forget()
+
+        header, lines = table
+        column_ids = [f"c{i}" for i in range(len(header))]
+        tree["columns"] = column_ids
+
+        for column_id, heading in zip(column_ids, header):
+            tree.heading(column_id, text=heading)
+            tree.column(
+                column_id,
+                width=max(
+                    DRDH_TABLE_MIN_COLUMN_WIDTH,
+                    self.drdh_table_font.measure(heading)
+                    + DRDH_TABLE_COLUMN_PADDING
+                ),
+                stretch=False,
+                anchor="center"
+            )
+
+        for line in lines:
+            tree.insert("", "end", values=line)
+
+        children = tree.get_children()
+        keep = [children[i] for i in selected if i < len(children)]
+
+        if keep:
+            tree.selection_set(keep)
+
+        tree.yview_moveto(top)
+
+    def on_drdh_table_ctrl_key(self, event) -> Optional[str]:
+        """Ctrl+C copies the selected rows (tab separated, with headings)."""
+        key = (event.keysym or "").lower()
+        code = event.keycode if os.name == "nt" else None
+
+        if key not in DRDH_TABLE_COPY_KEYSYMS and code != DRDH_TABLE_COPY_KEYCODE_WIN:
+            return None
+
+        tree = self.drdh_table_tree
+        items = tree.selection() or tree.get_children()
+
+        if not items:
+            return "break"
+
+        headings = [
+            tree.heading(column, "text") for column in tree["columns"]
+        ]
+        rows = [
+            "\t".join(str(v) for v in tree.item(item, "values"))
+            for item in items
+        ]
+
+        tree.clipboard_clear()
+        tree.clipboard_append("\n".join(["\t".join(headings)] + rows))
+
+        return "break"
+
+    def close_drdh_table_window(self) -> None:
+        """Close the table window (also when the DRDH plot is closed)."""
+        win = getattr(self, "drdh_table_window", None)
+
+        for attr in ("drdh_table_window", "drdh_table_tree",
+                     "drdh_table_empty_label", "drdh_table_font"):
+            if hasattr(self, attr):
+                delattr(self, attr)
+
+        if self.widget_alive(win):
+            win.destroy()
+
     def load_album_data(self):
         """
         "Load album data" button of the DRDH plot.
@@ -2056,12 +2240,15 @@ class DRDH_processing:
     def close_drdh_plot_window(self):
         """Drop the references when the user closes the DRDH plot window."""
         for attr in ("drdh_plot", "save_drdh_plot_button",
-                     "save_drdh_data_button", "load_album_data_button",
+                     "save_drdh_data_button", "show_drdh_table_button",
+                     "load_album_data_button",
                      "delete_album_data_button",
                      "interpolate_album_button",
                      "remove_interpolation_button"):
             if hasattr(self, attr):
                 delattr(self, attr)
+
+        self.close_drdh_table_window()
 
         if hasattr(self, "drdh_plot_window"):
             win = self.drdh_plot_window
@@ -2209,6 +2396,10 @@ class DRDH_processing:
         self.draw_group_rulers(ax, offsets)
 
         self.drdh_plot["canvas"].draw_idle()
+
+        # Every change of the data or of the overlap lands here, so the
+        # table follows it
+        self.refresh_drdh_table_window()
 
     def draw_group_rulers(self, ax, offsets):
         """
@@ -3052,6 +3243,7 @@ class DRDH_processing:
                 setattr(self, attributes[decimal_type], value)
 
                 self.update_labels()
+                self.refresh_drdh_table_window()
 
                 Messages.show(
                     "info",
