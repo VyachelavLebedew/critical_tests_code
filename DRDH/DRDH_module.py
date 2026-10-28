@@ -1596,7 +1596,7 @@ class DRDH_module:
                 "attr": "overlap",
                 "label": lambda self: self.overlap_required_label,
                 "label_text": "✓ Overlap",
-                "sign": "positive"
+                "sign": None
             },
 
             "Group_length": {
