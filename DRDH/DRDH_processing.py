@@ -98,6 +98,61 @@ DRDH_TABLE_COPY_KEYSYMS = ("c", "cyrillic_es")   # Ctrl+C, any layout
 DRDH_TABLE_COPY_KEYCODE_WIN = 67
 
 
+# ---------------------------------------------------------------------
+# "Int. reactivity plot" (Current_actions). Move to Settings if needed.
+# It has the same functions as the DRDH plot; the style (colors, widths,
+# rulers) is taken from DRDH_PLOT.
+# ---------------------------------------------------------------------
+KIND_DRDH = "DRDH"
+KIND_INT = "INT"
+
+INT_PLOT_MENU_LABEL = "Int. reactivity plot"
+INT_PLOT_TITLE = "Int. reactivity plot"
+INT_PLOT_Y_LABEL = "Integral reactivity, %"
+INT_PLOT_VALUE_HEADER = "Int. reactivity, %"
+INT_PLOT_ALBUM_LABEL = "Integral reactivity"
+INT_TABLE_TITLE = "Int. reactivity table"
+INT_TABLE_EMPTY_TEXT = "No integral reactivity results yet."
+
+# The curve starts with 0 at the position the first measured step started
+# from (the integral reactivity is counted from there).
+INT_PLOT_INITIAL_POINT = True
+
+# What differs between the two plots of the Current_actions menu
+PLOT_KINDS = {
+    KIND_DRDH: {
+        "title": "DRDH plot",
+        "save_plot_title": "Save DRDH plot",
+        "save_data_title": "Save DRDH plot data",
+        "table_title": DRDH_TABLE_TITLE,
+        "table_empty": DRDH_TABLE_EMPTY_TEXT,
+        "y_label": DRDH_PLOT['Y_LABEL'],
+        "album_label": "DRDH",
+        "value_header": "DRDH, pcm/cm",
+        "album_header": "Album DRDH, pcm/cm",
+        "interp_header": "Album interpolated DRDH, pcm/cm",
+        "position_word": "mean ",      # "H12 mean position, %"
+        "errors": True,
+        "decimals_attr": "DECIMAL_DRDH",
+    },
+    KIND_INT: {
+        "title": INT_PLOT_TITLE,
+        "save_plot_title": "Save Int. reactivity plot",
+        "save_data_title": "Save Int. reactivity plot data",
+        "table_title": INT_TABLE_TITLE,
+        "table_empty": INT_TABLE_EMPTY_TEXT,
+        "y_label": INT_PLOT_Y_LABEL,
+        "album_label": INT_PLOT_ALBUM_LABEL,
+        "value_header": INT_PLOT_VALUE_HEADER,
+        "album_header": "Album " + INT_PLOT_VALUE_HEADER,
+        "interp_header": "Album interpolated " + INT_PLOT_VALUE_HEADER,
+        "position_word": "",           # "H12 position, %"
+        "errors": False,
+        "decimals_attr": "DECIMAL_REACT",
+    },
+}
+
+
 class DRDH_processing:
 
     def __init__(self, root: tk.Widget, main_app: Any):
@@ -232,6 +287,10 @@ class DRDH_processing:
 
         # Legend of the plots (Plot -> Legend)
         self.show_legend: bool = True
+
+        # The two plot windows of the "Current_actions" menu
+        self.drdh_plot_view = ReactivityPlot(self, KIND_DRDH)
+        self.int_plot_view = ReactivityPlot(self, KIND_INT)
 
     @staticmethod
     def empty_state() -> Dict[str, Any]:
@@ -893,7 +952,12 @@ class DRDH_processing:
         current_actions.add_command(
             label="DRDH plot",
             font=FONTS['DATA_FONT'],
-            command=self.create_drdh_plot
+            command=self.drdh_plot_view.create_plot_window
+        )
+        current_actions.add_command(
+            label=INT_PLOT_MENU_LABEL,
+            font=FONTS['DATA_FONT'],
+            command=self.int_plot_view.create_plot_window
         )
         current_actions.add_command(
             label="Current values",
@@ -1151,7 +1215,7 @@ class DRDH_processing:
         self.close_experiment_parameters()
 
         # The overlap defines the abscissa of the DRDH plot
-        self.draw_drdh_plot()
+        self.redraw_plots()
 
     def close_experiment_parameters(self) -> None:
         """Close the experiment parameters window."""
@@ -1171,1268 +1235,15 @@ class DRDH_processing:
             if hasattr(self, attr):
                 delattr(self, attr)
 
-    def create_drdh_plot(self):
-        """
-        Open the "DRDH plot" window: differential worth against the group
-        position. Every measurement made so far is drawn immediately, and
-        every new one appears online.
-        """
-        if (
-            hasattr(self, "drdh_plot_window")
-            and self.widget_alive(self.drdh_plot_window)
-        ):
-            self.drdh_plot_window.lift()
-            self.drdh_plot_window.focus_force()
-            return
-
-        win = tk.Toplevel(self.root)
-        win.title("DRDH plot")
-        win.geometry("900x700")
-        self.drdh_plot_window = win
-        win.protocol("WM_DELETE_WINDOW", self.close_drdh_plot_window)
-
-        frame = tk.Frame(win, bg="white")
-        frame.pack(fill=tk.BOTH, expand=True)
-
-        fig = Figure(figsize=(9, 7))
-        canvas = FigureCanvasTkAgg(fig, master=frame)
-
-        # The toolbar has to be packed BEFORE the canvas: the canvas expands
-        # over the whole frame and would otherwise squeeze the toolbar out.
-        toolbar = NavigationToolbar2Tk(canvas, frame)
-        toolbar.update()
-        toolbar.pack(side=tk.TOP, fill=tk.X)
-
-        buttons_frame = tk.Frame(frame, bg="white")
-        buttons_frame.pack(side=tk.BOTTOM, fill=tk.X)
-
-        self.save_drdh_plot_button = SmallButtons(
-            buttons_frame,
-            text="Save plot",
-            command=self.save_drdh_plot,
-        )
-        self.save_drdh_plot_button.pack(
-            side=tk.LEFT, padx=GAPS['GAPS_X']['PAD_X_10'], pady=5
-        )
-
-        self.save_drdh_data_button = SmallButtons(
-            buttons_frame,
-            text="Save data",
-            command=self.save_drdh_data,
-        )
-        self.save_drdh_data_button.pack(
-            side=tk.LEFT, padx=GAPS['GAPS_X']['PAD_X_10'], pady=5
-        )
-
-        self.show_drdh_table_button = SmallButtons(
-            buttons_frame,
-            text=DRDH_TABLE_BUTTON_TEXT,
-            command=self.show_drdh_table,
-        )
-        self.show_drdh_table_button.pack(
-            side=tk.LEFT, padx=GAPS['GAPS_X']['PAD_X_10'], pady=5
-        )
-
-        self.load_album_data_button = SmallButtons(
-            buttons_frame,
-            text="Load album data",
-            command=self.load_album_data,
-        )
-        self.load_album_data_button.pack(
-            side=tk.LEFT, padx=GAPS['GAPS_X']['PAD_X_10'], pady=5
-        )
-
-        # Shown only while some album data is loaded
-        self.delete_album_data_button = SmallButtons(
-            buttons_frame,
-            text="Delete album data",
-            command=self.delete_album_data,
-        )
-
-        # Shown only while album data is loaded (and not yet interpolated)
-        self.interpolate_album_button = SmallButtons(
-            buttons_frame,
-            text="Interpolate",
-            command=self.interpolate_album,
-        )
-
-        # Shown only while the interpolated album data is on the plot
-        self.remove_interpolation_button = SmallButtons(
-            buttons_frame,
-            text="Remove interpolation",
-            command=self.remove_album_interpolation,
-        )
-        self.update_album_buttons()
-
-        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-
-        self.drdh_plot = {"fig": fig, "canvas": canvas}
-
-        # The window may be opened at any moment - show the whole history
-        self.draw_drdh_plot()
-
-    def save_drdh_plot(self):
-        """
-        Save the DRDH plot as an image.
-
-        Vector format (PDF) keep the quality at any scale and ignore
-        the DPI; PNG is rendered at 300 DPI, which is enough for printing.
-        """
-        if not getattr(self, "drdh_plot", None):
-            return
-
-        initial_dir = os.path.dirname(os.path.abspath(__file__))
-
-        filename = filedialog.asksaveasfilename(
-            initialdir=initial_dir,
-            defaultextension=".png",
-            filetypes=[
-                ("PNG image", "*.png"),
-                ("PDF document", "*.pdf"),
-            ],
-            title="Save DRDH plot"
-        )
-
-        if not filename:
-            return
-
-        self.drdh_plot["fig"].savefig(
-            filename, dpi=300, bbox_inches="tight"
-        )
-
-    def refresh_drdh_abscissas(self) -> None:
-        """
-        Place the measured points on the common axis again. The axis depends
-        on the overlap, which the user may change after the measurements.
-        """
-        for p in self.drdh_points:
-            if "idx1" in p:
-                p["u"] = self.get_program_coordinate(p["idx1"], p["idx2"])
-
-    def experiment_group_positions(self, p) -> List[Optional[float]]:
-        """
-        Positions of ALL the groups at a measured step, aligned with
-        Group_names: the mean of the start and of the end of the step, the
-        same way the abscissa of the point is taken. A group that stood
-        still simply keeps its position.
-        """
-        if "idx1" in p and "idx2" in p:
-            return [
-                float((g[p["idx1"]] + g[p["idx2"]]) / 2.0)
-                for g in self.Groups
-            ]
-
-        groups = p.get("groups") or {}
-
-        return [groups.get(name) for name in self.Group_names]
-
-    def get_drdh_table(self):
-        """
-        The table of the DRDH plot: the very one that "Save data" writes and
-        "Show table" shows.
-
-        All the data share ONE position column (the common axis of the
-        plot), sorted ascending. Right after it come the positions of every
-        group - the real ones, which do not depend on the overlap - so that
-        the handover between the groups can be checked:
-          - H.. mean position - the groups at a measured step (the mean of
-            the start and the end of the step);
-          - Album H.. position - the groups of the album table row (for the
-            interpolated value: interpolated the same way).
-        Then follow the measured DRDH with its error, the album DRDH and,
-        after "Interpolate", the album DRDH interpolated at the measured
-        step. A cell is blank where there is nothing at that position.
-
-        Returns:
-            (header, rows) - list of headings and list of rows of strings;
-            None if there is nothing to show.
-        """
-        self.refresh_drdh_abscissas()
-        points = [p for p in self.drdh_points if p["u"] is not None]
-        points.sort(key=lambda p: p["u"])
-        album_points = self.get_album_points()
-        interpolate = (
-            bool(album_points) and getattr(self, "album_interpolated", False)
-        )
-
-        if not points and not album_points:
-            return None
-
-        factor = DRDH_ERROR['SIGMA_FACTOR']
-        album_groups = (
-            sorted(album_points[0]["positions"]) if album_points else []
-        )
-
-        # One row per measured step; the interpolated album value belongs
-        # to the same row, because it is taken at that very position.
-        if interpolate:
-            interpolated = self.interpolate_album_values(
-                album_points, [p["u"] for p in points],
-                with_positions=True
-            )
-        else:
-            interpolated = [None] * len(points)
-
-        rows = []
-        by_position = {}
-
-        for p, item in zip(points, interpolated):
-            row = {
-                "u": p["u"], "exp": p,
-                "album": None,
-                "interp": item[0] if item else None,
-                "album_pos": item[1] if item else None
-            }
-            rows.append(row)
-            by_position.setdefault(round(p["u"], 6), row)
-
-        # An album point at the position of a measured step shares its row;
-        # any other one gets a row of its own.
-        for a_p in album_points:
-            row = by_position.get(round(a_p["u"], 6))
-
-            if row is not None and row["album"] is None:
-                row["album"] = a_p["DRDH"]
-                row["album_pos"] = a_p["positions"]
-                continue
-
-            row = {
-                "u": a_p["u"], "exp": None,
-                "album": a_p["DRDH"], "interp": None,
-                "album_pos": a_p["positions"]
-            }
-            rows.append(row)
-            by_position.setdefault(round(a_p["u"], 6), row)
-
-        rows.sort(key=lambda r: r["u"])
-
-        def fmt(value, decimals):
-            return "" if value is None else f"{value:.{decimals}f}"
-
-        header = ["Position, %"]
-        header += [f"{name} mean position, %" for name in self.Group_names]
-        header += [
-            f"Album {self.Group_names[gi]} position, %"
-            for gi in album_groups
-        ]
-        header += [
-            "DRDH, pcm/cm",
-            f"+/-{factor:g}sigma, pcm/cm",
-            "Reference group"
-        ]
-
-        if album_points:
-            header.append("Album DRDH, pcm/cm")
-
-        if interpolate:
-            header.append("Album interpolated DRDH, pcm/cm")
-
-        lines = []
-
-        for r in rows:
-            p = r["exp"]
-            line = [fmt(r["u"], self.DECIMAL_GROUP)]
-
-            if p is not None:
-                line += [
-                    fmt(v, self.DECIMAL_GROUP)
-                    for v in self.experiment_group_positions(p)
-                ]
-            else:
-                line += [""] * len(self.Group_names)
-
-            album_pos = r["album_pos"] or {}
-            line += [
-                fmt(album_pos.get(gi), self.DECIMAL_GROUP)
-                for gi in album_groups
-            ]
-
-            if p is not None:
-                line += [
-                    fmt(p["DRDH"], self.DECIMAL_DRDH),
-                    fmt(p["sigma"] * factor, self.DECIMAL_DRDH),
-                    str(p["ref_group"] or "")
-                ]
-            else:
-                line += [""] * 3
-
-            if album_points:
-                line.append(fmt(r["album"], self.DECIMAL_DRDH))
-
-            if interpolate:
-                line.append(fmt(r["interp"], self.DECIMAL_DRDH))
-
-            lines.append(line)
-
-        return header, lines
-
-    def save_drdh_data(self):
-        """
-        Save the points of the DRDH plot as a tab separated text file, so
-        that the curve can be replotted in any other program. The content is
-        the table of get_drdh_table (the same as in "Show table").
-        """
-        table = self.get_drdh_table()
-
-        if table is None:
-            Messages.show("warning", "NO_DRDH_RESULTS")
-            return
-
-        header, lines = table
-
-        initial_dir = os.path.dirname(os.path.abspath(__file__))
-
-        filename = filedialog.asksaveasfilename(
-            initialdir=initial_dir,
-            defaultextension=".txt",
-            filetypes=[("Text files", "*.txt")],
-            title="Save DRDH plot data"
-        )
-
-        if not filename:
-            return
-
-        with open(filename, "w", encoding="utf-8") as f:
-            f.write("\t".join(header) + "\n")
-
-            for line in lines:
-                f.write("\t".join(line) + "\n")
-
-    # ------------------------------------------------------------------
-    # Table of the DRDH plot ("Show table")
-    # ------------------------------------------------------------------
-    def show_drdh_table(self) -> None:
-        """
-        Open the table that "Save data" would write, to check on the spot
-        whether the handover of the movement agrees (the group positions at
-        the measured steps, the album positions, the DRDH and the
-        interpolated album DRDH side by side).
-
-        The table follows every change: the overlap, new or deleted steps,
-        the album data, the interpolation, the decimals.
-        """
-        if self.widget_alive(getattr(self, "drdh_table_window", None)):
-            self.drdh_table_window.deiconify()
-            self.drdh_table_window.lift()
-            self.refresh_drdh_table_window()
-            return
-
-        parent = getattr(self, "drdh_plot_window", self.root)
-        win = tk.Toplevel(parent)
-        win.title(DRDH_TABLE_TITLE)
-        win.geometry(DRDH_TABLE_GEOMETRY)
-        self.drdh_table_window = win
-        win.protocol("WM_DELETE_WINDOW", self.close_drdh_table_window)
-
-        style = ttk.Style(win)
-        self.drdh_table_font = tkfont.Font(root=win, font=FONTS['DATA_FONT'])
-        style.configure(
-            DRDH_TABLE_STYLE,
-            font=FONTS['DATA_FONT'],
-            rowheight=(
-                self.drdh_table_font.metrics("linespace")
-                + DRDH_TABLE_ROW_PADDING
-            )
-        )
-        style.configure(f"{DRDH_TABLE_STYLE}.Heading", font=FONTS['DATA_FONT'])
-
-        frame = tk.Frame(win)
-        frame.pack(fill=tk.BOTH, expand=True)
-        frame.grid_rowconfigure(0, weight=1)
-        frame.grid_columnconfigure(0, weight=1)
-
-        tree = ttk.Treeview(
-            frame, show="headings", selectmode="extended",
-            style=DRDH_TABLE_STYLE
-        )
-        y_scroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
-        x_scroll = ttk.Scrollbar(
-            frame, orient="horizontal", command=tree.xview
-        )
-        tree.configure(
-            yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set
-        )
-        tree.grid(row=0, column=0, sticky="nsew")
-        y_scroll.grid(row=0, column=1, sticky="ns")
-        x_scroll.grid(row=1, column=0, sticky="ew")
-
-        self.drdh_table_tree = tree
-        self.drdh_table_empty_label = tk.Label(
-            frame, text=DRDH_TABLE_EMPTY_TEXT, font=FONTS['DATA_FONT']
-        )
-
-        win.bind("<Control-KeyPress>", self.on_drdh_table_ctrl_key)
-        self.refresh_drdh_table_window()
-
-    def refresh_drdh_table_window(self) -> None:
-        """
-        Refill the open table; does nothing if it is closed. The scroll
-        position and the selected rows are kept.
-        """
-        win = getattr(self, "drdh_table_window", None)
-
-        if not self.widget_alive(win):
-            return
-
-        tree = self.drdh_table_tree
-        table = self.get_drdh_table()
-
-        top = tree.yview()[0]
-        selected = [tree.index(item) for item in tree.selection()]
-        tree.delete(*tree.get_children())
-
-        if table is None:
-            tree["columns"] = ()
-            self.drdh_table_empty_label.place(relx=0.5, rely=0.5, anchor="center")
-            return
-
-        self.drdh_table_empty_label.place_forget()
-
-        header, lines = table
-        column_ids = [f"c{i}" for i in range(len(header))]
-        tree["columns"] = column_ids
-
-        for column_id, heading in zip(column_ids, header):
-            tree.heading(column_id, text=heading)
-            tree.column(
-                column_id,
-                width=max(
-                    DRDH_TABLE_MIN_COLUMN_WIDTH,
-                    self.drdh_table_font.measure(heading)
-                    + DRDH_TABLE_COLUMN_PADDING
-                ),
-                stretch=False,
-                anchor="center"
-            )
-
-        for line in lines:
-            tree.insert("", "end", values=line)
-
-        children = tree.get_children()
-        keep = [children[i] for i in selected if i < len(children)]
-
-        if keep:
-            tree.selection_set(keep)
-
-        tree.yview_moveto(top)
-
-    def on_drdh_table_ctrl_key(self, event) -> Optional[str]:
-        """Ctrl+C copies the selected rows (tab separated, with headings)."""
-        key = (event.keysym or "").lower()
-        code = event.keycode if os.name == "nt" else None
-
-        if key not in DRDH_TABLE_COPY_KEYSYMS and code != DRDH_TABLE_COPY_KEYCODE_WIN:
-            return None
-
-        tree = self.drdh_table_tree
-        items = tree.selection() or tree.get_children()
-
-        if not items:
-            return "break"
-
-        headings = [
-            tree.heading(column, "text") for column in tree["columns"]
-        ]
-        rows = [
-            "\t".join(str(v) for v in tree.item(item, "values"))
-            for item in items
-        ]
-
-        tree.clipboard_clear()
-        tree.clipboard_append("\n".join(["\t".join(headings)] + rows))
-
-        return "break"
-
-    def close_drdh_table_window(self) -> None:
-        """Close the table window (also when the DRDH plot is closed)."""
-        win = getattr(self, "drdh_table_window", None)
-
-        for attr in ("drdh_table_window", "drdh_table_tree",
-                     "drdh_table_empty_label", "drdh_table_font"):
-            if hasattr(self, attr):
-                delattr(self, attr)
-
-        if self.widget_alive(win):
-            win.destroy()
-
-    def load_album_data(self):
-        """
-        "Load album data" button of the DRDH plot.
-
-        Reads an Excel table with the calculated DRDH (the first sheet, the
-        first row holds the column names), lets the user say which columns
-        hold the group positions and which one the DRDH, and draws the
-        calculated curve over the measured points.
-        """
-        if not self.moving_order:
-            Messages.show(
-                "error", "VALUE_ERROR",
-                value_name="Album data",
-                error="no group has moved in this experiment, so there is "
-                      "no common position axis to put the calculation on"
-            )
-            return
-
-        initial_dir = os.path.dirname(os.path.abspath(__file__))
-
-        filename = filedialog.askopenfilename(
-            initialdir=initial_dir,
-            filetypes=[("Excel files", "*.xlsx *.xlsm")],
-            title="Load album data"
-        )
-
-        if not filename:
-            return
-
-        try:
-            headers, rows = self.read_album_table(filename)
-        except Exception as error:
-            Messages.show(
-                "error", "VALUE_ERROR",
-                value_name="Album data",
-                error=f"the file cannot be read: {error}"
-            )
-            return
-
-        if len(rows) < 2 or not headers:
-            Messages.show(
-                "error", "VALUE_ERROR",
-                value_name="Album data",
-                error="the table needs a header row and at least two rows "
-                      "of data"
-            )
-            return
-
-        parent = (
-            self.drdh_plot_window
-            if getattr(self, "drdh_plot_window", None) else self.root
-        )
-        choice = self.ask_album_columns(parent, headers)
-
-        if choice is None:
-            return
-
-        group_columns, drdh_column = choice
-        points = self.build_album_points(rows, group_columns, drdh_column)
-
-        if not points:
-            Messages.show(
-                "error", "VALUE_ERROR",
-                value_name="Album data",
-                error="no calculated point could be placed on the plot: "
-                      "check the chosen columns (a point needs a DRDH value "
-                      "and a group of the experiment that moves around it)"
-            )
-            return
-
-        self.album_data = {
-            "name": os.path.basename(filename),
-            "rows": rows,
-            "group_columns": group_columns,
-            "drdh_column": drdh_column
-        }
-        self.album_interpolated = False
-        self.update_album_buttons()
-        self.draw_drdh_plot()
-
-    def get_album_points(self):
-        """The loaded album data placed on the plot; [] if none is loaded."""
-        album = getattr(self, "album_data", None)
-
-        if not album:
-            return []
-
-        return self.build_album_points(
-            album["rows"], album["group_columns"], album["drdh_column"]
-        )
-
-    def update_album_buttons(self):
-        """
-        Show the album buttons only when they make sense:
-        "Delete album data" while album data is loaded, "Interpolate" while
-        it is loaded and not interpolated yet, "Remove interpolation" while
-        the interpolated data is on the plot.
-        """
-        loaded = bool(getattr(self, "album_data", None))
-        interpolated = loaded and getattr(self, "album_interpolated", False)
-
-        wanted = (
-            ("delete_album_data_button", loaded),
-            ("interpolate_album_button", loaded and not interpolated),
-            ("remove_interpolation_button", interpolated),
-        )
-
-        for attr, visible in wanted:
-            button = getattr(self, attr, None)
-
-            if button is None:
-                continue
-
-            button.pack_forget()
-
-            if visible:
-                button.pack(
-                    side=tk.LEFT, padx=GAPS['GAPS_X']['PAD_X_10'], pady=5
-                )
-
-    def delete_album_data(self):
-        """Remove the calculated curve from the plot (and from Save data)."""
-        self.album_data = None
-        self.album_interpolated = False
-        self.update_album_buttons()
-        self.draw_drdh_plot()
-
-    def interpolate_album(self):
-        """
-        "Interpolate" button of the DRDH plot.
-
-        Adds the album curve interpolated at the positions of the measured
-        steps, so that the calculation and the experiment can be compared
-        point by point. The interpolation is recomputed on every redraw, so
-        it follows new measurements and a changed overlap.
-        """
-        album_points = self.get_album_points()
-
-        if not album_points:
-            return
-
-        self.refresh_drdh_abscissas()
-        points = [p for p in self.drdh_points if p["u"] is not None]
-
-        if not points:
-            Messages.show("warning", "NO_DRDH_RESULTS")
-            return
-
-        values = self.interpolate_album_values(
-            album_points, [p["u"] for p in points]
-        )
-
-        if all(v is None for v in values):
-            Messages.show(
-                "error", "VALUE_ERROR",
-                value_name="Album data",
-                error="no measured step lies within the calculated curve, "
-                      "so there is nothing to interpolate"
-            )
-            return
-
-        self.album_interpolated = True
-        self.update_album_buttons()
-        self.draw_drdh_plot()
-
-    def remove_album_interpolation(self):
-        """Take the interpolated album data off the plot and Save data."""
-        self.album_interpolated = False
-        self.update_album_buttons()
-        self.draw_drdh_plot()
-
-    @staticmethod
-    def interpolate_album_values(album_points, targets,
-                                 with_positions=False):
-        """
-        The album DRDH at the given positions, by linear interpolation
-        between the neighbouring calculated points. Returns a list aligned
-        with `targets`; None where the position lies outside the calculated
-        curve or in a break of it (the same break as album_line draws: the
-        reference group changes AND the abscissa jumps), since there is no
-        honest value to interpolate there.
-
-        With with_positions every item is (DRDH, {group index: position})
-        - the positions of the album groups at that point, interpolated in
-        the same way.
-        """
-        empty = [None] * len(targets)
-
-        if len(album_points) < 2:
-            return empty
-
-        pts = sorted(album_points, key=lambda p: p["u"])
-        xs = np.array([p["u"] for p in pts], dtype=float)
-        refs = [p["ref"] for p in pts]
-
-        # the series to interpolate: the DRDH and, if asked, every group
-        gis = sorted(pts[0]["positions"]) if with_positions else []
-        columns = [np.array([p["DRDH"] for p in pts], dtype=float)]
-        columns += [
-            np.array([p["positions"][gi] for p in pts], dtype=float)
-            for gi in gis
-        ]
-
-        # Points with the same abscissa (e.g. at a handover) are averaged
-        ux, first, inverse = np.unique(
-            xs, return_index=True, return_inverse=True
-        )
-        inverse = inverse.ravel()
-        counts = np.bincount(inverse)
-        merged = [
-            np.bincount(inverse, weights=c) / counts for c in columns
-        ]
-        uref = [refs[i] for i in first]
-
-        if len(ux) < 2:
-            return empty
-
-        gaps = np.diff(ux)
-        limit = 3.0 * float(np.median(gaps))
-        eps = 1e-9
-        result = []
-
-        for t in targets:
-            if t < ux[0] - eps or t > ux[-1] + eps:
-                result.append(None)
-                continue
-
-            j = int(np.searchsorted(ux, t - eps))
-
-            if j >= len(ux):
-                lo = hi = len(ux) - 1
-                k = 0.0
-            elif j == 0 or abs(ux[j] - t) <= eps:
-                lo = hi = j
-                k = 0.0
-            else:
-                lo, hi = j - 1, j
-
-                if uref[lo] != uref[hi] and gaps[lo] > limit:
-                    result.append(None)
-                    continue
-
-                k = (t - ux[lo]) / (ux[hi] - ux[lo])
-
-            values = [float(c[lo] + (c[hi] - c[lo]) * k) for c in merged]
-
-            if with_positions:
-                result.append((values[0], dict(zip(gis, values[1:]))))
-            else:
-                result.append(values[0])
-
-        return result
-
-    def get_interpolated_album_points(self, points, album_points):
-        """
-        The interpolated album data placed at the given measured points, as
-        [{"u", "DRDH"}]; [] while "Interpolate" is off.
-        """
-        if not getattr(self, "album_interpolated", False):
-            return []
-
-        if not album_points or not points:
-            return []
-
-        values = self.interpolate_album_values(
-            album_points, [p["u"] for p in points]
-        )
-
-        return [
-            {"u": p["u"], "DRDH": v}
-            for p, v in zip(points, values) if v is not None
-        ]
-
-    @staticmethod
-    def album_number(value) -> Optional[float]:
-        """A cell as a number; None for an empty or non numeric cell."""
-        if value is None or isinstance(value, bool):
-            return None
-
-        if isinstance(value, (int, float)):
-            return float(value)
-
-        try:
-            # a decimal comma typed as text
-            return float(str(value).strip().replace(",", "."))
-        except ValueError:
-            return None
-
-    def read_album_table(self, filename):
-        """
-        Column names (the first row) and the data rows of the first sheet.
-        Every cell is a number or None.
-        """
-        from openpyxl import load_workbook
-
-        workbook = load_workbook(filename, read_only=True, data_only=True)
-
-        try:
-            raw_rows = [
-                list(r) for r in workbook.active.iter_rows(values_only=True)
-            ]
-        finally:
-            workbook.close()
-
-        # An empty tail of the sheet is not data
-        while raw_rows and all(c is None for c in raw_rows[-1]):
-            raw_rows.pop()
-
-        if not raw_rows:
-            return [], []
-
-        width = max(len(r) for r in raw_rows)
-        raw_rows = [r + [None] * (width - len(r)) for r in raw_rows]
-
-        headers = [
-            str(c).strip() if c is not None and str(c).strip()
-            else f"Column {get_column_letter(i + 1)}"
-            for i, c in enumerate(raw_rows[0])
-        ]
-        rows = [[self.album_number(c) for c in r] for r in raw_rows[1:]]
-
-        return headers, rows
-
-    def ask_album_columns(self, parent, headers):
-        """
-        Ask which column holds the position of every group that moved in the
-        experiment and which one holds the DRDH.
-
-        Returns ({group index: column index}, DRDH column index) or None if
-        the user cancelled.
-        """
-        labels = [
-            f"{get_column_letter(i + 1)}: {h}" for i, h in enumerate(headers)
-        ]
-        result = {"value": None}
-
-        dialog = tk.Toplevel(parent)
-        dialog.title("Album data columns")
-        dialog.config(bg=COLORS['BACKGROUND_COLOR'])
-        dialog.resizable(False, False)
-        dialog.transient(parent)
-        dialog.grab_set()
-
-        tk.Label(
-            dialog,
-            text="Which column holds what?",
-            font=FONTS['DATA_FONT'], bg=COLORS['BACKGROUND_COLOR']
-        ).grid(row=0, column=0, columnspan=2, padx=15, pady=(12, 8))
-
-        def add_choice(row, text, preselect=None):
-            tk.Label(
-                dialog, text=text,
-                font=FONTS['DATA_FONT'], bg=COLORS['BACKGROUND_COLOR']
-            ).grid(row=row, column=0, sticky="e", padx=(15, 5), pady=4)
-
-            box = ttk.Combobox(
-                dialog, values=labels, state="readonly", width=24
-            )
-            box.grid(row=row, column=1, sticky="w", padx=(0, 15), pady=4)
-
-            if preselect is not None:
-                box.current(preselect)
-
-            return box
-
-        group_boxes = {}
-
-        for row, gi in enumerate(self.moving_order, start=1):
-            name = self.Group_names[gi]
-
-            # A column called like the group is the obvious guess
-            guess = next(
-                (i for i, h in enumerate(headers)
-                 if h.strip().casefold() == name.strip().casefold()),
-                None
-            )
-            group_boxes[gi] = add_choice(row, f"Position of {name}:", guess)
-
-        drdh_box = add_choice(len(group_boxes) + 1, "DRDH:")
-
-        def accept():
-            boxes = list(group_boxes.values()) + [drdh_box]
-
-            if any(box.current() < 0 for box in boxes):
-                Messages.show(
-                    "error", "VALUE_ERROR",
-                    value_name="Columns",
-                    error="choose a column for every field"
-                )
-                return
-
-            result["value"] = (
-                {gi: box.current() for gi, box in group_boxes.items()},
-                drdh_box.current()
-            )
-            dialog.destroy()
-
-        buttons = tk.Frame(dialog, bg=COLORS['BACKGROUND_COLOR'])
-        buttons.grid(
-            row=len(group_boxes) + 2, column=0, columnspan=2, pady=(8, 12)
-        )
-        SmallButtons(buttons, text="OK", command=accept).pack(
-            side=tk.LEFT, padx=GAPS['GAPS_X']['PAD_X_10']
-        )
-        SmallButtons(buttons, text="Cancel", command=dialog.destroy).pack(
-            side=tk.LEFT, padx=GAPS['GAPS_X']['PAD_X_10']
-        )
-
-        self.root.wait_window(dialog)
-
-        return result["value"]
-
-    @staticmethod
-    def album_line(points):
-        """
-        x and y of the calculated curve, with a break (NaN) wherever the
-        reference group changes AND the abscissa jumps.
-
-        Such a jump appears when the groups of the table do not join (the
-        calculation skips a part of the stroke, or the groups move at
-        different speeds), and a straight line across the gap would show a
-        dependence which does not exist.
-        """
-        xs = [p["u"] for p in points]
-        ys = [p["DRDH"] for p in points]
-
-        if len(points) < 3:
-            return xs, ys
-
-        gaps = np.abs(np.diff(xs))
-        typical = float(np.median(gaps))
-        limit = 3.0 * typical if typical > 0 else np.inf
-
-        out_x, out_y = [xs[0]], [ys[0]]
-
-        for i in range(1, len(points)):
-            if points[i]["ref"] != points[i - 1]["ref"] and gaps[i - 1] > limit:
-                out_x.append(np.nan)
-                out_y.append(np.nan)
-
-            out_x.append(xs[i])
-            out_y.append(ys[i])
-
-        return out_x, out_y
-
-    def get_album_offsets(self, rows, group_columns):
-        """
-        Offsets of the groups on the common axis for the ALBUM data.
-
-        The handover of the calculation is found in the table itself, and
-        the overlap of the experiment parameters plays no part in it: the
-        groups are put in the order they start to move; a group joins the
-        previous one at the row before its own first movement, where the
-        previous group stands at the position it hands the movement over
-        from. So the calculated curve is continuous, and a step of the table
-        is a step of the plot.
-
-        The two axes are tied together at the leading group: the first group
-        (in the order the groups start moving in the experiment) that moves
-        in the table has the same offset in both. The leading group does not
-        move on the axis when the overlap is changed, so neither does the
-        calculation; the other rulers of the experiment differ from the
-        calculated handovers by the difference of the overlaps.
-
-        Returns {group index: offset}; groups that do not move in the table
-        have no offset.
-        """
-        series = {}
-        start = {}
-
-        for gi, column in group_columns.items():
-            values = [row[column] for row in rows]
-            known = [v for v in values if v is not None]
-
-            if not known:
-                continue
-
-            # fill the gaps with the nearest known value
-            filled, last = [], known[0]
-            for v in values:
-                last = v if v is not None else last
-                filled.append(last)
-
-            series[gi] = np.asarray(filled, dtype=float)
-            moved = np.flatnonzero(~np.isclose(series[gi], series[gi][0]))
-
-            if moved.size:
-                start[gi] = int(moved[0])
-
-        if not start:
-            return {}
-
-        order = sorted(start, key=lambda gi: start[gi])
-        relative = {order[0]: 0.0}
-
-        for previous, gi in zip(order, order[1:]):
-            row = start[gi] - 1
-            relative[gi] = (
-                relative[previous] + series[previous][row] - series[gi][row]
-            )
-
-        experiment = self.get_group_offsets()
-        anchor = next(
-            (gi for gi in self.moving_order if gi in relative),
-            order[0]
-        )
-
-        return {
-            gi: v - relative[anchor] + experiment.get(anchor, 0.0)
-            for gi, v in relative.items()
-        }
-
-    def build_album_points(self, rows, group_columns, drdh_column):
-        """
-        Put the calculated DRDH on the same axis as the measured one.
-
-        A DRDH of the table belongs to the group positions of its own row.
-        The reference group is chosen as for a measured step: the group with
-        the highest number among those that move around the row (the
-        neighbour rows differ in its position). The abscissa is the honest
-        position of that group in the row on the common axis of the plot,
-        whose offsets for the calculation come from the table itself
-        (get_album_offsets), not from the overlap: a table step of 2 % is a
-        step of 2 % on the plot, whatever the overlap of the experiment.
-
-        The calculated rows need not coincide with the measured steps -
-        only the group positions matter. Rows without a DRDH, rows with a
-        missing position and rows in which no group of the experiment moves
-        are skipped.
-        """
-        offsets = self.get_album_offsets(rows, group_columns)
-        points = []
-
-        for r in range(len(rows)):
-            drdh = rows[r][drdh_column]
-
-            if drdh is None:
-                continue
-
-            current = {gi: rows[r][c] for gi, c in group_columns.items()}
-
-            if None in current.values():
-                continue
-
-            # The neighbours decide who is moving; the first and the last
-            # row only have one.
-            before = rows[max(r - 1, 0)]
-            after = rows[min(r + 1, len(rows) - 1)]
-
-            moved = []
-
-            for gi in self.moving_order:
-                if gi not in group_columns or gi not in offsets:
-                    continue
-
-                a = before[group_columns[gi]]
-                b = after[group_columns[gi]]
-
-                if a is not None and b is not None and not np.isclose(a, b):
-                    moved.append(gi)
-
-            if not moved:
-                continue
-
-            ref = max(
-                moved,
-                key=lambda gi: self.group_number(self.Group_names[gi])
-            )
-            u = offsets[ref] + current[ref]
-
-            points.append({
-                "u": float(u),
-                "DRDH": float(drdh),
-                "ref": ref,
-                # all the groups of the table row, for Save data
-                "positions": {gi: float(v) for gi, v in current.items()}
-            })
-
-        # The rows of the table are the trajectory of the calculation: keep
-        # their order, so that the line follows it.
-        return points
-
-    def close_drdh_plot_window(self):
-        """Drop the references when the user closes the DRDH plot window."""
-        for attr in ("drdh_plot", "save_drdh_plot_button",
-                     "save_drdh_data_button", "show_drdh_table_button",
-                     "load_album_data_button",
-                     "delete_album_data_button",
-                     "interpolate_album_button",
-                     "remove_interpolation_button"):
-            if hasattr(self, attr):
-                delattr(self, attr)
-
-        self.close_drdh_table_window()
-
-        if hasattr(self, "drdh_plot_window"):
-            win = self.drdh_plot_window
-            del self.drdh_plot_window
-            win.destroy()
-
-    def draw_drdh_plot(self):
-        """(Re)draw the DRDH plot. Silently does nothing if it is closed."""
-        if not (
-            hasattr(self, "drdh_plot")
-            and hasattr(self, "drdh_plot_window")
-            and self.widget_alive(self.drdh_plot_window)
-        ):
-            return
-
-        fig = self.drdh_plot["fig"]
-
-        # Rebuilding the axes also drops the group rulers of the previous draw
-        fig.clear()
-        ax = fig.add_subplot(111)
-
-        n_rulers = max(len(self.moving_order), 1)
-        fig.subplots_adjust(
-            bottom=0.10 + DRDH_PLOT['RULER_GAP'] * n_rulers,
-            left=0.11, right=0.97, top=0.95
-        )
-
-        offsets = self.get_group_offsets()
-
-        self.refresh_drdh_abscissas()
-        points = [p for p in self.drdh_points if p["u"] is not None]
-        points.sort(key=lambda p: p["u"])
-
-        # Calculated curve loaded with "Load album data" (may be absent).
-        # It is placed here, not when loaded, because the axis depends on the
-        # overlap, which may be changed later.
-        album_points = self.get_album_points()
-
-        # The rulers stop at 100 %, but a group may physically go a bit
-        # further (e.g. 103.66 %), so the axis still has to show such points.
-        ruler_start = min(offsets.values()) if offsets else 0.0
-        ruler_end = (
-            (max(offsets.values()) if offsets else 0.0)
-            + DRDH_PLOT['RULER_MAX']
-        )
-        u_min = min([ruler_start] + [p["u"] for p in points + album_points])
-        u_max = max([ruler_end] + [p["u"] for p in points + album_points])
-
-        # Below the experiment (zorder 4 and 5), so that it never hides it
-        if album_points:
-            album_xs, album_ys = self.album_line(album_points)
-
-            ax.plot(
-                album_xs,
-                album_ys,
-                color=DRDH_PLOT.get('ALBUM_COLOR', "#2E7D32"),
-                linewidth=DRDH_PLOT.get('ALBUM_WIDTH', 1.6),
-                marker='o',
-                markersize=DRDH_PLOT.get('ALBUM_POINT_SIZE', 3),
-                label="Album data",
-                zorder=3
-            )
-
-        # The album curve taken at the measured steps ("Interpolate")
-        interpolated = self.get_interpolated_album_points(
-            points, album_points
-        )
-
-        if interpolated:
-            ax.plot(
-                [p["u"] for p in interpolated],
-                [p["DRDH"] for p in interpolated],
-                linestyle='none',
-                marker='D',
-                markersize=DRDH_PLOT.get('ALBUM_INTERP_SIZE', 5),
-                markerfacecolor='white',
-                markeredgecolor=DRDH_PLOT.get('ALBUM_COLOR', "#2E7D32"),
-                markeredgewidth=1.3,
-                label="Album data (interpolated)",
-                zorder=3
-            )
-
-        if points:
-            us = np.array([p["u"] for p in points])
-            ys = np.array([p["DRDH"] for p in points])
-            errs = np.array([
-                p["sigma"] * DRDH_ERROR['SIGMA_FACTOR'] for p in points
-            ])
-
-            ax.plot(
-                us, ys,
-                color=DRDH_PLOT['LINE_COLOR'],
-                linewidth=DRDH_PLOT['LINE_WIDTH'],
-                zorder=4
-            )
-            ax.errorbar(
-                us, ys, yerr=errs,
-                fmt='o',
-                color=DRDH_PLOT['POINT_COLOR'],
-                markersize=DRDH_PLOT['POINT_SIZE'],
-                ecolor=DRDH_PLOT['ERROR_COLOR'],
-                elinewidth=DRDH_PLOT['ERROR_WIDTH'],
-                capsize=DRDH_PLOT['ERROR_CAPSIZE'],
-                capthick=DRDH_PLOT['ERROR_WIDTH'],
-                linestyle='none',
-                label="Experiment",
-                zorder=5
-            )
-
-        # The vertical range has to hold both the experiment and the album
-        tops, bottoms = [], []
-
-        if points:
-            tops.append(float(np.max(ys + errs)))
-            bottoms.append(float(np.min(ys - errs)))
-
-        if album_points:
-            album_values = [p["DRDH"] for p in album_points]
-            tops.append(max(album_values))
-            bottoms.append(min(album_values))
-
-        if tops:
-            top = max(tops)
-            bottom = min(bottoms)
-            margin = 0.12 * max(top - bottom, 1e-9)
-            ax.set_ylim(min(0.0, bottom - margin), top + margin)
-            ax.legend(frameon=True, loc="best")
-
-        ax.set_ylabel(DRDH_PLOT['Y_LABEL'], fontsize=PLOT['PLOT_LABEL_SIZE'])
-        ax.set_xlim(u_min - 3, u_max + 3)
-        ax.grid(
-            True,
-            color=DRDH_PLOT['GRID_COLOR'],
-            linewidth=DRDH_PLOT['GRID_WIDTH']
-        )
-        ax.set_axisbelow(True)
-
-        for spine in ("top", "right"):
-            ax.spines[spine].set_visible(False)
-
-        # The common axis itself is meaningless for the user - only the
-        # per-group rulers below it are.
-        ax.xaxis.set_visible(False)
-
-        self.draw_group_rulers(ax, offsets)
-
-        self.drdh_plot["canvas"].draw_idle()
-
-        # Every change of the data or of the overlap lands here, so the
-        # table follows it
-        self.refresh_drdh_table_window()
-
-    def draw_group_rulers(self, ax, offsets):
-        """
-        One 0..100 % ruler per moving group, in the order the groups start
-        moving, each shifted by the overlap (see get_group_offsets), so that
-        the handover point of two groups falls on the same vertical line.
-        """
-        step = DRDH_PLOT['RULER_STEP']
-        gap = DRDH_PLOT['RULER_GAP']
-
-        top = DRDH_PLOT['RULER_MAX']
-
-        for k, gi in enumerate(self.moving_order):
-            off = offsets[gi]
-
-            ruler = ax.secondary_xaxis(
-                -gap * (k + 1),
-                functions=(
-                    lambda u, o=off: u - o,
-                    lambda p, o=off: p + o
-                )
-            )
-            ruler.set_xticks(np.arange(0, top + 1, step))
-            ruler.spines["bottom"].set_bounds(0, top)
-            ruler.tick_params(labelsize=7, length=3)
-            ruler.set_xlabel(
-                self.Group_names[gi],
-                labelpad=-26,
-                x=-0.02,
-                ha="right",
-                fontsize=8,
-                fontweight="bold"
-            )
+    def redraw_plots(self) -> None:
+        """Redraw every open plot of the Current_actions menu."""
+        self.drdh_plot_view.draw_plot()
+        self.int_plot_view.draw_plot()
+
+    def refresh_plot_tables(self) -> None:
+        """Refill every open "Show table" window of those plots."""
+        self.drdh_plot_view.refresh_table_window()
+        self.int_plot_view.refresh_table_window()
 
     def close_values_window(self):
         """Drop references to the 'Current values' window on close."""
@@ -3243,7 +2054,7 @@ class DRDH_processing:
                 setattr(self, attributes[decimal_type], value)
 
                 self.update_labels()
-                self.refresh_drdh_table_window()
+                self.refresh_plot_tables()
 
                 Messages.show(
                     "info",
@@ -3457,13 +2268,16 @@ class DRDH_processing:
             "idx1": idx1,
             "idx2": idx2,
             "DRDH": DRDH_pcm,
+            # cumulative reactivity after this step (Beff): the value of
+            # the "Int. reactivity plot"
+            "R": self.cumulative_R,
             "sigma": self.get_drdh_sigma(
                 delta_rho_pcm, delta_H_cm, DRDH_pcm
             ),
             "ref_group": self.Group_names[ref] if ref is not None else None,
             "groups": group_values
         })
-        self.draw_drdh_plot()
+        self.redraw_plots()
 
         self.check_initial_position(idx1)
 
@@ -3600,7 +2414,7 @@ class DRDH_processing:
         self.active_interval = 1
 
         self.refresh_line_tables()
-        self.draw_drdh_plot()
+        self.redraw_plots()
         self.update_hint()
 
         for plot in self.plot_windows:
@@ -3645,7 +2459,7 @@ class DRDH_processing:
         # The rejected measurement must disappear from the DRDH plot too
         if self.drdh_points:
             self.drdh_points.pop()
-        self.draw_drdh_plot()
+        self.redraw_plots()
 
         # "Fix 1" stays valid for this cycle - only line 2 is re-selected
         self.active_interval = 2
@@ -3815,7 +2629,7 @@ class DRDH_processing:
         # Refresh all dependent UI.
         self.refresh_line_tables()
         self.refresh_results_table()
-        self.draw_drdh_plot()
+        self.redraw_plots()
         self.update_hint()
 
         if self.values_window_alive():
@@ -5387,3 +4201,1389 @@ class DRDH_processing:
             f"DRDH, {unit}/cm =", f"{DRDH:.{self.DECIMAL_DRDH}f}"
         ] + [""] * 6
         self.drdh_table.item(self.drdh_table.get_children()[2], values=values)
+
+
+class ReactivityPlot:
+    """
+    One plot window of the "Current_actions" menu: the DRDH plot or the
+    integral reactivity plot ("Int. reactivity plot"). Both have exactly the
+    same functions (Save plot, Save data, Show table, Load album data,
+    Interpolate, ...); only what is plotted differs (see get_points,
+    album_neighbours and PLOT_KINDS). Every window keeps its own state, so
+    the two can be open at the same time with different album data.
+
+    Everything that is not defined here (the groups, the decimals, the
+    overlap, the measured steps ...) is taken from the DRDH_processing.
+    """
+
+    def __init__(self, processing: "DRDH_processing", kind: str):
+        self._processing = processing
+        self.kind: str = kind
+        self.config: Dict[str, Any] = PLOT_KINDS[kind]
+
+    def __getattr__(self, name: str):
+        # Called only for what the plot does not have itself
+        if name.startswith("__") or name == "_processing":
+            raise AttributeError(name)
+
+        return getattr(self._processing, name)
+
+    def create_plot_window(self):
+        """
+        Open the plot window (DRDH or integral reactivity) against the
+        group position. Every measurement made so far is drawn immediately, and
+        every new one appears online.
+        """
+        if (
+            hasattr(self, "plot_window")
+            and self.widget_alive(self.plot_window)
+        ):
+            self.plot_window.lift()
+            self.plot_window.focus_force()
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title(self.config["title"])
+        win.geometry("900x700")
+        self.plot_window = win
+        win.protocol("WM_DELETE_WINDOW", self.close_plot_window)
+
+        frame = tk.Frame(win, bg="white")
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        fig = Figure(figsize=(9, 7))
+        canvas = FigureCanvasTkAgg(fig, master=frame)
+
+        # The toolbar has to be packed BEFORE the canvas: the canvas expands
+        # over the whole frame and would otherwise squeeze the toolbar out.
+        toolbar = NavigationToolbar2Tk(canvas, frame)
+        toolbar.update()
+        toolbar.pack(side=tk.TOP, fill=tk.X)
+
+        buttons_frame = tk.Frame(frame, bg="white")
+        buttons_frame.pack(side=tk.BOTTOM, fill=tk.X)
+
+        self.save_plot_button = SmallButtons(
+            buttons_frame,
+            text="Save plot",
+            command=self.save_plot,
+        )
+        self.save_plot_button.pack(
+            side=tk.LEFT, padx=GAPS['GAPS_X']['PAD_X_10'], pady=5
+        )
+
+        self.save_data_button = SmallButtons(
+            buttons_frame,
+            text="Save data",
+            command=self.save_data,
+        )
+        self.save_data_button.pack(
+            side=tk.LEFT, padx=GAPS['GAPS_X']['PAD_X_10'], pady=5
+        )
+
+        self.show_table_button = SmallButtons(
+            buttons_frame,
+            text=DRDH_TABLE_BUTTON_TEXT,
+            command=self.show_table,
+        )
+        self.show_table_button.pack(
+            side=tk.LEFT, padx=GAPS['GAPS_X']['PAD_X_10'], pady=5
+        )
+
+        self.load_album_data_button = SmallButtons(
+            buttons_frame,
+            text="Load album data",
+            command=self.load_album_data,
+        )
+        self.load_album_data_button.pack(
+            side=tk.LEFT, padx=GAPS['GAPS_X']['PAD_X_10'], pady=5
+        )
+
+        # Shown only while some album data is loaded
+        self.delete_album_data_button = SmallButtons(
+            buttons_frame,
+            text="Delete album data",
+            command=self.delete_album_data,
+        )
+
+        # Shown only while album data is loaded (and not yet interpolated)
+        self.interpolate_album_button = SmallButtons(
+            buttons_frame,
+            text="Interpolate",
+            command=self.interpolate_album,
+        )
+
+        # Shown only while the interpolated album data is on the plot
+        self.remove_interpolation_button = SmallButtons(
+            buttons_frame,
+            text="Remove interpolation",
+            command=self.remove_album_interpolation,
+        )
+        self.update_album_buttons()
+
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        self.plot_objects = {"fig": fig, "canvas": canvas}
+
+        # The window may be opened at any moment - show the whole history
+        self.draw_plot()
+
+    def save_plot(self):
+        """
+        Save the DRDH plot as an image.
+
+        Vector format (PDF) keep the quality at any scale and ignore
+        the DPI; PNG is rendered at 300 DPI, which is enough for printing.
+        """
+        if not getattr(self, "plot_objects", None):
+            return
+
+        initial_dir = os.path.dirname(os.path.abspath(__file__))
+
+        filename = filedialog.asksaveasfilename(
+            initialdir=initial_dir,
+            defaultextension=".png",
+            filetypes=[
+                ("PNG image", "*.png"),
+                ("PDF document", "*.pdf"),
+            ],
+            title=self.config["save_plot_title"]
+        )
+
+        if not filename:
+            return
+
+        self.plot_objects["fig"].savefig(
+            filename, dpi=300, bbox_inches="tight"
+        )
+
+    # ------------------------------------------------------------------
+    # What differs between the two plots
+    # ------------------------------------------------------------------
+    @property
+    def value_decimals(self) -> int:
+        """Decimals of the plotted value (the Decimal menu of the window)."""
+        return getattr(self._processing, self.config["decimals_attr"])
+
+    def get_points(self) -> List[Dict[str, Any]]:
+        """
+        The measured points of this plot, sorted by the abscissa:
+        {"u": abscissa on the common axis, "value": the plotted value,
+         "sigma": uncertainty or None, "ref_group": name of the reference
+         group, "positions": positions of ALL the groups (aligned with
+         Group_names)}.
+
+        DRDH plot:  the value is the differential worth of the step, put at
+                    the MEAN position of the step.
+        Int. plot:  the value is the integral reactivity reached at the END
+                    of the step (the R column of the results), put at the
+                    position the groups have at the END of the step. With
+                    INT_PLOT_INITIAL_POINT the curve starts with 0 at the
+                    position the first step started from.
+        """
+        proc = self._processing
+        offsets = proc.get_group_offsets()
+        points = []
+
+        for k, p in enumerate(proc.drdh_points):
+            has_idx = "idx1" in p and "idx2" in p
+
+            if self.kind == KIND_DRDH:
+                u = (
+                    proc.get_program_coordinate(p["idx1"], p["idx2"])
+                    if has_idx else p.get("u")
+                )
+
+                if u is None:
+                    continue
+
+                if has_idx:
+                    positions = [
+                        float((g[p["idx1"]] + g[p["idx2"]]) / 2.0)
+                        for g in proc.Groups
+                    ]
+                else:
+                    groups = p.get("groups") or {}
+                    positions = [groups.get(n) for n in proc.Group_names]
+
+                points.append({
+                    "u": u, "value": p["DRDH"], "sigma": p["sigma"],
+                    "ref_group": p["ref_group"], "positions": positions
+                })
+                continue
+
+            # Integral reactivity
+            if not has_idx or "R" not in p:
+                continue
+
+            ref = proc.get_reference_group(p["idx1"], p["idx2"])
+
+            if ref is None or ref not in offsets:
+                continue
+
+            end = p["idx2"]
+            points.append({
+                "u": offsets[ref] + float(proc.Groups[ref][end]),
+                # R is kept in Beff; the plot is in percent (R * beta)
+                "value": p["R"] * proc.beta,
+                "sigma": None,
+                "ref_group": proc.Group_names[ref],
+                "positions": [float(g[end]) for g in proc.Groups],
+                "step": k
+            })
+
+            if k == 0 and INT_PLOT_INITIAL_POINT:
+                start = p["idx1"]
+                points.append({
+                    "u": offsets[ref] + float(proc.Groups[ref][start]),
+                    "value": 0.0,
+                    "sigma": None,
+                    "ref_group": proc.Group_names[ref],
+                    "positions": [float(g[start]) for g in proc.Groups]
+                })
+
+        points.sort(key=lambda p: p["u"])
+
+        return points
+
+    def album_neighbours(self, r: int, count: int):
+        """
+        Indices of the two album rows that decide which group moves at row r.
+
+        DRDH: the rows around r (the DRDH belongs to the middle of a step).
+        Int.: the step that ENDS at r, i.e. r-1 -> r (the first row, which
+        has no step behind it, takes the step that follows it).
+        """
+        if self.kind == KIND_DRDH:
+            return max(r - 1, 0), min(r + 1, count - 1)
+
+        if r == 0:
+            return 0, min(1, count - 1)
+
+        return r - 1, r
+
+    def get_table(self):
+        """
+        The table of the plot: the very one that "Save data" writes and
+        "Show table" shows.
+
+        All the data share ONE position column (the common axis of the
+        plot), sorted ascending. Right after it come the positions of every
+        group - the real ones, which do not depend on the overlap - so that
+        the handover between the groups can be checked:
+          - H.. position (DRDH plot: H.. mean position) - the groups at a
+            measured step (DRDH: the mean of the start and of the end of the
+            step; Int. reactivity: the end of the step);
+          - Album H.. position - the groups of the album table row (for the
+            interpolated value: interpolated the same way).
+        Then follow the measured value (with its error for the DRDH), the
+        album value and, after "Interpolate", the album value interpolated
+        at the measured step. A cell is blank where there is nothing at that
+        position.
+
+        Returns:
+            (header, rows) - list of headings and list of rows of strings;
+            None if there is nothing to show.
+        """
+        points = self.get_points()
+        album_points = self.get_album_points()
+        interpolate = (
+            bool(album_points) and getattr(self, "album_interpolated", False)
+        )
+
+        if not points and not album_points:
+            return None
+
+        with_errors = self.config["errors"]
+        factor = DRDH_ERROR['SIGMA_FACTOR']
+        decimals = self.value_decimals
+        album_groups = (
+            sorted(album_points[0]["positions"]) if album_points else []
+        )
+
+        # One row per measured step; the interpolated album value belongs
+        # to the same row, because it is taken at that very position.
+        if interpolate:
+            interpolated = self.interpolate_album_values(
+                album_points, [p["u"] for p in points],
+                with_positions=True
+            )
+        else:
+            interpolated = [None] * len(points)
+
+        rows = []
+        by_position = {}
+
+        for p, item in zip(points, interpolated):
+            row = {
+                "u": p["u"], "exp": p,
+                "album": None,
+                "interp": item[0] if item else None,
+                "album_pos": item[1] if item else None
+            }
+            rows.append(row)
+            by_position.setdefault(round(p["u"], 6), row)
+
+        # An album point at the position of a measured step shares its row;
+        # any other one gets a row of its own.
+        for a_p in album_points:
+            row = by_position.get(round(a_p["u"], 6))
+
+            if row is not None and row["album"] is None:
+                row["album"] = a_p["value"]
+                row["album_pos"] = a_p["positions"]
+                continue
+
+            row = {
+                "u": a_p["u"], "exp": None,
+                "album": a_p["value"], "interp": None,
+                "album_pos": a_p["positions"]
+            }
+            rows.append(row)
+            by_position.setdefault(round(a_p["u"], 6), row)
+
+        rows.sort(key=lambda r: r["u"])
+
+        def fmt(value, places):
+            return "" if value is None else f"{value:.{places}f}"
+
+        header = ["Position, %"]
+        header += [
+            f"{name} {self.config['position_word']}position, %"
+            for name in self.Group_names
+        ]
+        header += [
+            f"Album {self.Group_names[gi]} position, %"
+            for gi in album_groups
+        ]
+        header.append(self.config["value_header"])
+
+        if with_errors:
+            header.append(f"+/-{factor:g}sigma, pcm/cm")
+
+        header.append("Reference group")
+
+        if album_points:
+            header.append(self.config["album_header"])
+
+        if interpolate:
+            header.append(self.config["interp_header"])
+
+        lines = []
+
+        for r in rows:
+            p = r["exp"]
+            line = [fmt(r["u"], self.DECIMAL_GROUP)]
+
+            if p is not None:
+                line += [fmt(v, self.DECIMAL_GROUP) for v in p["positions"]]
+            else:
+                line += [""] * len(self.Group_names)
+
+            album_pos = r["album_pos"] or {}
+            line += [
+                fmt(album_pos.get(gi), self.DECIMAL_GROUP)
+                for gi in album_groups
+            ]
+
+            if p is not None:
+                line.append(fmt(p["value"], decimals))
+
+                if with_errors:
+                    line.append(fmt(p["sigma"] * factor, decimals))
+
+                line.append(str(p["ref_group"] or ""))
+            else:
+                line += [""] * (3 if with_errors else 2)
+
+            if album_points:
+                line.append(fmt(r["album"], decimals))
+
+            if interpolate:
+                line.append(fmt(r["interp"], decimals))
+
+            lines.append(line)
+
+        return header, lines
+
+    def save_data(self):
+        """
+        Save the points of the DRDH plot as a tab separated text file, so
+        that the curve can be replotted in any other program. The content is
+        the table of get_table (the same as in "Show table").
+        """
+        table = self.get_table()
+
+        if table is None:
+            Messages.show("warning", "NO_DRDH_RESULTS")
+            return
+
+        header, lines = table
+
+        initial_dir = os.path.dirname(os.path.abspath(__file__))
+
+        filename = filedialog.asksaveasfilename(
+            initialdir=initial_dir,
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt")],
+            title=self.config["save_data_title"]
+        )
+
+        if not filename:
+            return
+
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write("\t".join(header) + "\n")
+
+            for line in lines:
+                f.write("\t".join(line) + "\n")
+
+    # ------------------------------------------------------------------
+    # Table of the DRDH plot ("Show table")
+    # ------------------------------------------------------------------
+    def show_table(self) -> None:
+        """
+        Open the table that "Save data" would write, to check on the spot
+        whether the handover of the movement agrees (the group positions at
+        the measured steps, the album positions, the DRDH and the
+        interpolated album DRDH side by side).
+
+        The table follows every change: the overlap, new or deleted steps,
+        the album data, the interpolation, the decimals.
+        """
+        if self.widget_alive(getattr(self, "table_window", None)):
+            self.table_window.deiconify()
+            self.table_window.lift()
+            self.refresh_table_window()
+            return
+
+        parent = getattr(self, "plot_window", self.root)
+        win = tk.Toplevel(parent)
+        win.title(self.config["table_title"])
+        win.geometry(DRDH_TABLE_GEOMETRY)
+        self.table_window = win
+        win.protocol("WM_DELETE_WINDOW", self.close_table_window)
+
+        style = ttk.Style(win)
+        self.table_font = tkfont.Font(root=win, font=FONTS['DATA_FONT'])
+        style.configure(
+            DRDH_TABLE_STYLE,
+            font=FONTS['DATA_FONT'],
+            rowheight=(
+                self.table_font.metrics("linespace")
+                + DRDH_TABLE_ROW_PADDING
+            )
+        )
+        style.configure(f"{DRDH_TABLE_STYLE}.Heading", font=FONTS['DATA_FONT'])
+
+        frame = tk.Frame(win)
+        frame.pack(fill=tk.BOTH, expand=True)
+        frame.grid_rowconfigure(0, weight=1)
+        frame.grid_columnconfigure(0, weight=1)
+
+        tree = ttk.Treeview(
+            frame, show="headings", selectmode="extended",
+            style=DRDH_TABLE_STYLE
+        )
+        y_scroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+        x_scroll = ttk.Scrollbar(
+            frame, orient="horizontal", command=tree.xview
+        )
+        tree.configure(
+            yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set
+        )
+        tree.grid(row=0, column=0, sticky="nsew")
+        y_scroll.grid(row=0, column=1, sticky="ns")
+        x_scroll.grid(row=1, column=0, sticky="ew")
+
+        self.table_tree = tree
+        self.table_empty_label = tk.Label(
+            frame, text=self.config["table_empty"], font=FONTS['DATA_FONT']
+        )
+
+        win.bind("<Control-KeyPress>", self.on_table_ctrl_key)
+        self.refresh_table_window()
+
+    def refresh_table_window(self) -> None:
+        """
+        Refill the open table; does nothing if it is closed. The scroll
+        position and the selected rows are kept.
+        """
+        win = getattr(self, "table_window", None)
+
+        if not self.widget_alive(win):
+            return
+
+        tree = self.table_tree
+        table = self.get_table()
+
+        top = tree.yview()[0]
+        selected = [tree.index(item) for item in tree.selection()]
+        tree.delete(*tree.get_children())
+
+        if table is None:
+            tree["columns"] = ()
+            self.table_empty_label.place(relx=0.5, rely=0.5, anchor="center")
+            return
+
+        self.table_empty_label.place_forget()
+
+        header, lines = table
+        column_ids = [f"c{i}" for i in range(len(header))]
+        tree["columns"] = column_ids
+
+        for column_id, heading in zip(column_ids, header):
+            tree.heading(column_id, text=heading)
+            tree.column(
+                column_id,
+                width=max(
+                    DRDH_TABLE_MIN_COLUMN_WIDTH,
+                    self.table_font.measure(heading)
+                    + DRDH_TABLE_COLUMN_PADDING
+                ),
+                stretch=False,
+                anchor="center"
+            )
+
+        for line in lines:
+            tree.insert("", "end", values=line)
+
+        children = tree.get_children()
+        keep = [children[i] for i in selected if i < len(children)]
+
+        if keep:
+            tree.selection_set(keep)
+
+        tree.yview_moveto(top)
+
+    def on_table_ctrl_key(self, event) -> Optional[str]:
+        """Ctrl+C copies the selected rows (tab separated, with headings)."""
+        key = (event.keysym or "").lower()
+        code = event.keycode if os.name == "nt" else None
+
+        if key not in DRDH_TABLE_COPY_KEYSYMS and code != DRDH_TABLE_COPY_KEYCODE_WIN:
+            return None
+
+        tree = self.table_tree
+        items = tree.selection() or tree.get_children()
+
+        if not items:
+            return "break"
+
+        headings = [
+            tree.heading(column, "text") for column in tree["columns"]
+        ]
+        rows = [
+            "\t".join(str(v) for v in tree.item(item, "values"))
+            for item in items
+        ]
+
+        tree.clipboard_clear()
+        tree.clipboard_append("\n".join(["\t".join(headings)] + rows))
+
+        return "break"
+
+    def close_table_window(self) -> None:
+        """Close the table window (also when the DRDH plot is closed)."""
+        win = getattr(self, "table_window", None)
+
+        for attr in ("table_window", "table_tree",
+                     "table_empty_label", "table_font"):
+            if hasattr(self, attr):
+                delattr(self, attr)
+
+        if self.widget_alive(win):
+            win.destroy()
+
+    def load_album_data(self):
+        """
+        "Load album data" button of the DRDH plot.
+
+        Reads an Excel table with the calculated DRDH (the first sheet, the
+        first row holds the column names), lets the user say which columns
+        hold the group positions and which one the DRDH, and draws the
+        calculated curve over the measured points.
+        """
+        if not self.moving_order:
+            Messages.show(
+                "error", "VALUE_ERROR",
+                value_name="Album data",
+                error="no group has moved in this experiment, so there is "
+                      "no common position axis to put the calculation on"
+            )
+            return
+
+        initial_dir = os.path.dirname(os.path.abspath(__file__))
+
+        filename = filedialog.askopenfilename(
+            initialdir=initial_dir,
+            filetypes=[("Excel files", "*.xlsx *.xlsm")],
+            title="Load album data"
+        )
+
+        if not filename:
+            return
+
+        try:
+            headers, rows = self.read_album_table(filename)
+        except Exception as error:
+            Messages.show(
+                "error", "VALUE_ERROR",
+                value_name="Album data",
+                error=f"the file cannot be read: {error}"
+            )
+            return
+
+        if len(rows) < 2 or not headers:
+            Messages.show(
+                "error", "VALUE_ERROR",
+                value_name="Album data",
+                error="the table needs a header row and at least two rows "
+                      "of data"
+            )
+            return
+
+        parent = (
+            self.plot_window
+            if getattr(self, "plot_window", None) else self.root
+        )
+        choice = self.ask_album_columns(parent, headers)
+
+        if choice is None:
+            return
+
+        group_columns, drdh_column = choice
+        points = self.build_album_points(rows, group_columns, drdh_column)
+
+        if not points:
+            Messages.show(
+                "error", "VALUE_ERROR",
+                value_name="Album data",
+                error="no calculated point could be placed on the plot: "
+                      "check the chosen columns (a point needs a DRDH value "
+                      "and a group of the experiment that moves around it)"
+            )
+            return
+
+        self.album_data = {
+            "name": os.path.basename(filename),
+            "rows": rows,
+            "group_columns": group_columns,
+            "drdh_column": drdh_column
+        }
+        self.album_interpolated = False
+        self.update_album_buttons()
+        self.draw_plot()
+
+    def get_album_points(self):
+        """The loaded album data placed on the plot; [] if none is loaded."""
+        album = getattr(self, "album_data", None)
+
+        if not album:
+            return []
+
+        return self.build_album_points(
+            album["rows"], album["group_columns"], album["drdh_column"]
+        )
+
+    def update_album_buttons(self):
+        """
+        Show the album buttons only when they make sense:
+        "Delete album data" while album data is loaded, "Interpolate" while
+        it is loaded and not interpolated yet, "Remove interpolation" while
+        the interpolated data is on the plot.
+        """
+        loaded = bool(getattr(self, "album_data", None))
+        interpolated = loaded and getattr(self, "album_interpolated", False)
+
+        wanted = (
+            ("delete_album_data_button", loaded),
+            ("interpolate_album_button", loaded and not interpolated),
+            ("remove_interpolation_button", interpolated),
+        )
+
+        for attr, visible in wanted:
+            button = getattr(self, attr, None)
+
+            if button is None:
+                continue
+
+            button.pack_forget()
+
+            if visible:
+                button.pack(
+                    side=tk.LEFT, padx=GAPS['GAPS_X']['PAD_X_10'], pady=5
+                )
+
+    def delete_album_data(self):
+        """Remove the calculated curve from the plot (and from Save data)."""
+        self.album_data = None
+        self.album_interpolated = False
+        self.update_album_buttons()
+        self.draw_plot()
+
+    def interpolate_album(self):
+        """
+        "Interpolate" button of the DRDH plot.
+
+        Adds the album curve interpolated at the positions of the measured
+        steps, so that the calculation and the experiment can be compared
+        point by point. The interpolation is recomputed on every redraw, so
+        it follows new measurements and a changed overlap.
+        """
+        album_points = self.get_album_points()
+
+        if not album_points:
+            return
+
+        points = self.get_points()
+
+        if not points:
+            Messages.show("warning", "NO_DRDH_RESULTS")
+            return
+
+        values = self.interpolate_album_values(
+            album_points, [p["u"] for p in points]
+        )
+
+        if all(v is None for v in values):
+            Messages.show(
+                "error", "VALUE_ERROR",
+                value_name="Album data",
+                error="no measured step lies within the calculated curve, "
+                      "so there is nothing to interpolate"
+            )
+            return
+
+        self.album_interpolated = True
+        self.update_album_buttons()
+        self.draw_plot()
+
+    def remove_album_interpolation(self):
+        """Take the interpolated album data off the plot and Save data."""
+        self.album_interpolated = False
+        self.update_album_buttons()
+        self.draw_plot()
+
+    @staticmethod
+    def interpolate_album_values(album_points, targets,
+                                 with_positions=False):
+        """
+        The album DRDH at the given positions, by linear interpolation
+        between the neighbouring calculated points. Returns a list aligned
+        with `targets`; None where the position lies outside the calculated
+        curve or in a break of it (the same break as album_line draws: the
+        reference group changes AND the abscissa jumps), since there is no
+        honest value to interpolate there.
+
+        With with_positions every item is (DRDH, {group index: position})
+        - the positions of the album groups at that point, interpolated in
+        the same way.
+        """
+        empty = [None] * len(targets)
+
+        if len(album_points) < 2:
+            return empty
+
+        pts = sorted(album_points, key=lambda p: p["u"])
+        xs = np.array([p["u"] for p in pts], dtype=float)
+        refs = [p["ref"] for p in pts]
+
+        # the series to interpolate: the DRDH and, if asked, every group
+        gis = sorted(pts[0]["positions"]) if with_positions else []
+        columns = [np.array([p["value"] for p in pts], dtype=float)]
+        columns += [
+            np.array([p["positions"][gi] for p in pts], dtype=float)
+            for gi in gis
+        ]
+
+        # Points with the same abscissa (e.g. at a handover) are averaged
+        ux, first, inverse = np.unique(
+            xs, return_index=True, return_inverse=True
+        )
+        inverse = inverse.ravel()
+        counts = np.bincount(inverse)
+        merged = [
+            np.bincount(inverse, weights=c) / counts for c in columns
+        ]
+        uref = [refs[i] for i in first]
+
+        if len(ux) < 2:
+            return empty
+
+        gaps = np.diff(ux)
+        limit = 3.0 * float(np.median(gaps))
+        eps = 1e-9
+        result = []
+
+        for t in targets:
+            if t < ux[0] - eps or t > ux[-1] + eps:
+                result.append(None)
+                continue
+
+            j = int(np.searchsorted(ux, t - eps))
+
+            if j >= len(ux):
+                lo = hi = len(ux) - 1
+                k = 0.0
+            elif j == 0 or abs(ux[j] - t) <= eps:
+                lo = hi = j
+                k = 0.0
+            else:
+                lo, hi = j - 1, j
+
+                if uref[lo] != uref[hi] and gaps[lo] > limit:
+                    result.append(None)
+                    continue
+
+                k = (t - ux[lo]) / (ux[hi] - ux[lo])
+
+            values = [float(c[lo] + (c[hi] - c[lo]) * k) for c in merged]
+
+            if with_positions:
+                result.append((values[0], dict(zip(gis, values[1:]))))
+            else:
+                result.append(values[0])
+
+        return result
+
+    def get_interpolated_album_points(self, points, album_points):
+        """
+        The interpolated album data placed at the given measured points, as
+        [{"u", "DRDH"}]; [] while "Interpolate" is off.
+        """
+        if not getattr(self, "album_interpolated", False):
+            return []
+
+        if not album_points or not points:
+            return []
+
+        values = self.interpolate_album_values(
+            album_points, [p["u"] for p in points]
+        )
+
+        return [
+            {"u": p["u"], "value": v}
+            for p, v in zip(points, values) if v is not None
+        ]
+
+    @staticmethod
+    def album_number(value) -> Optional[float]:
+        """A cell as a number; None for an empty or non numeric cell."""
+        if value is None or isinstance(value, bool):
+            return None
+
+        if isinstance(value, (int, float)):
+            return float(value)
+
+        try:
+            # a decimal comma typed as text
+            return float(str(value).strip().replace(",", "."))
+        except ValueError:
+            return None
+
+    def read_album_table(self, filename):
+        """
+        Column names (the first row) and the data rows of the first sheet.
+        Every cell is a number or None.
+        """
+        from openpyxl import load_workbook
+
+        workbook = load_workbook(filename, read_only=True, data_only=True)
+
+        try:
+            raw_rows = [
+                list(r) for r in workbook.active.iter_rows(values_only=True)
+            ]
+        finally:
+            workbook.close()
+
+        # An empty tail of the sheet is not data
+        while raw_rows and all(c is None for c in raw_rows[-1]):
+            raw_rows.pop()
+
+        if not raw_rows:
+            return [], []
+
+        width = max(len(r) for r in raw_rows)
+        raw_rows = [r + [None] * (width - len(r)) for r in raw_rows]
+
+        headers = [
+            str(c).strip() if c is not None and str(c).strip()
+            else f"Column {get_column_letter(i + 1)}"
+            for i, c in enumerate(raw_rows[0])
+        ]
+        rows = [[self.album_number(c) for c in r] for r in raw_rows[1:]]
+
+        return headers, rows
+
+    def ask_album_columns(self, parent, headers):
+        """
+        Ask which column holds the position of every group that moved in the
+        experiment and which one holds the DRDH.
+
+        Returns ({group index: column index}, DRDH column index) or None if
+        the user cancelled.
+        """
+        labels = [
+            f"{get_column_letter(i + 1)}: {h}" for i, h in enumerate(headers)
+        ]
+        result = {"value": None}
+
+        dialog = tk.Toplevel(parent)
+        dialog.title("Album data columns")
+        dialog.config(bg=COLORS['BACKGROUND_COLOR'])
+        dialog.resizable(False, False)
+        dialog.transient(parent)
+        dialog.grab_set()
+
+        tk.Label(
+            dialog,
+            text="Which column holds what?",
+            font=FONTS['DATA_FONT'], bg=COLORS['BACKGROUND_COLOR']
+        ).grid(row=0, column=0, columnspan=2, padx=15, pady=(12, 8))
+
+        def add_choice(row, text, preselect=None):
+            tk.Label(
+                dialog, text=text,
+                font=FONTS['DATA_FONT'], bg=COLORS['BACKGROUND_COLOR']
+            ).grid(row=row, column=0, sticky="e", padx=(15, 5), pady=4)
+
+            box = ttk.Combobox(
+                dialog, values=labels, state="readonly", width=24
+            )
+            box.grid(row=row, column=1, sticky="w", padx=(0, 15), pady=4)
+
+            if preselect is not None:
+                box.current(preselect)
+
+            return box
+
+        group_boxes = {}
+
+        for row, gi in enumerate(self.moving_order, start=1):
+            name = self.Group_names[gi]
+
+            # A column called like the group is the obvious guess
+            guess = next(
+                (i for i, h in enumerate(headers)
+                 if h.strip().casefold() == name.strip().casefold()),
+                None
+            )
+            group_boxes[gi] = add_choice(row, f"Position of {name}:", guess)
+
+        drdh_box = add_choice(
+            len(group_boxes) + 1, f"{self.config['album_label']}:"
+        )
+
+        def accept():
+            boxes = list(group_boxes.values()) + [drdh_box]
+
+            if any(box.current() < 0 for box in boxes):
+                Messages.show(
+                    "error", "VALUE_ERROR",
+                    value_name="Columns",
+                    error="choose a column for every field"
+                )
+                return
+
+            result["value"] = (
+                {gi: box.current() for gi, box in group_boxes.items()},
+                drdh_box.current()
+            )
+            dialog.destroy()
+
+        buttons = tk.Frame(dialog, bg=COLORS['BACKGROUND_COLOR'])
+        buttons.grid(
+            row=len(group_boxes) + 2, column=0, columnspan=2, pady=(8, 12)
+        )
+        SmallButtons(buttons, text="OK", command=accept).pack(
+            side=tk.LEFT, padx=GAPS['GAPS_X']['PAD_X_10']
+        )
+        SmallButtons(buttons, text="Cancel", command=dialog.destroy).pack(
+            side=tk.LEFT, padx=GAPS['GAPS_X']['PAD_X_10']
+        )
+
+        self.root.wait_window(dialog)
+
+        return result["value"]
+
+    @staticmethod
+    def album_line(points):
+        """
+        x and y of the calculated curve, with a break (NaN) wherever the
+        reference group changes AND the abscissa jumps.
+
+        Such a jump appears when the groups of the table do not join (the
+        calculation skips a part of the stroke, or the groups move at
+        different speeds), and a straight line across the gap would show a
+        dependence which does not exist.
+        """
+        xs = [p["u"] for p in points]
+        ys = [p["value"] for p in points]
+
+        if len(points) < 3:
+            return xs, ys
+
+        gaps = np.abs(np.diff(xs))
+        typical = float(np.median(gaps))
+        limit = 3.0 * typical if typical > 0 else np.inf
+
+        out_x, out_y = [xs[0]], [ys[0]]
+
+        for i in range(1, len(points)):
+            if points[i]["ref"] != points[i - 1]["ref"] and gaps[i - 1] > limit:
+                out_x.append(np.nan)
+                out_y.append(np.nan)
+
+            out_x.append(xs[i])
+            out_y.append(ys[i])
+
+        return out_x, out_y
+
+    def get_album_offsets(self, rows, group_columns):
+        """
+        Offsets of the groups on the common axis for the ALBUM data.
+
+        The handover of the calculation is found in the table itself, and
+        the overlap of the experiment parameters plays no part in it: the
+        groups are put in the order they start to move; a group joins the
+        previous one at the row before its own first movement, where the
+        previous group stands at the position it hands the movement over
+        from. So the calculated curve is continuous, and a step of the table
+        is a step of the plot.
+
+        The two axes are tied together at the leading group: the first group
+        (in the order the groups start moving in the experiment) that moves
+        in the table has the same offset in both. The leading group does not
+        move on the axis when the overlap is changed, so neither does the
+        calculation; the other rulers of the experiment differ from the
+        calculated handovers by the difference of the overlaps.
+
+        Returns {group index: offset}; groups that do not move in the table
+        have no offset.
+        """
+        series = {}
+        start = {}
+
+        for gi, column in group_columns.items():
+            values = [row[column] for row in rows]
+            known = [v for v in values if v is not None]
+
+            if not known:
+                continue
+
+            # fill the gaps with the nearest known value
+            filled, last = [], known[0]
+            for v in values:
+                last = v if v is not None else last
+                filled.append(last)
+
+            series[gi] = np.asarray(filled, dtype=float)
+            moved = np.flatnonzero(~np.isclose(series[gi], series[gi][0]))
+
+            if moved.size:
+                start[gi] = int(moved[0])
+
+        if not start:
+            return {}
+
+        order = sorted(start, key=lambda gi: start[gi])
+        relative = {order[0]: 0.0}
+
+        for previous, gi in zip(order, order[1:]):
+            row = start[gi] - 1
+            relative[gi] = (
+                relative[previous] + series[previous][row] - series[gi][row]
+            )
+
+        experiment = self.get_group_offsets()
+        anchor = next(
+            (gi for gi in self.moving_order if gi in relative),
+            order[0]
+        )
+
+        return {
+            gi: v - relative[anchor] + experiment.get(anchor, 0.0)
+            for gi, v in relative.items()
+        }
+
+    def build_album_points(self, rows, group_columns, drdh_column):
+        """
+        Put the calculated DRDH on the same axis as the measured one.
+
+        A DRDH of the table belongs to the group positions of its own row.
+        The reference group is chosen as for a measured step: the group with
+        the highest number among those that move around the row (the
+        neighbour rows differ in its position). The abscissa is the honest
+        position of that group in the row on the common axis of the plot,
+        whose offsets for the calculation come from the table itself
+        (get_album_offsets), not from the overlap: a table step of 2 % is a
+        step of 2 % on the plot, whatever the overlap of the experiment.
+
+        The calculated rows need not coincide with the measured steps -
+        only the group positions matter. Rows without a DRDH, rows with a
+        missing position and rows in which no group of the experiment moves
+        are skipped.
+        """
+        offsets = self.get_album_offsets(rows, group_columns)
+        points = []
+
+        for r in range(len(rows)):
+            drdh = rows[r][drdh_column]
+
+            if drdh is None:
+                continue
+
+            current = {gi: rows[r][c] for gi, c in group_columns.items()}
+
+            if None in current.values():
+                continue
+
+            # The neighbours decide who is moving; the first and the last
+            # row only have one.
+            first, second = self.album_neighbours(r, len(rows))
+            before = rows[first]
+            after = rows[second]
+
+            moved = []
+
+            for gi in self.moving_order:
+                if gi not in group_columns or gi not in offsets:
+                    continue
+
+                a = before[group_columns[gi]]
+                b = after[group_columns[gi]]
+
+                if a is not None and b is not None and not np.isclose(a, b):
+                    moved.append(gi)
+
+            if not moved:
+                continue
+
+            ref = max(
+                moved,
+                key=lambda gi: self.group_number(self.Group_names[gi])
+            )
+            u = offsets[ref] + current[ref]
+
+            points.append({
+                "u": float(u),
+                "value": float(drdh),
+                "ref": ref,
+                # all the groups of the table row, for Save data
+                "positions": {gi: float(v) for gi, v in current.items()}
+            })
+
+        # The rows of the table are the trajectory of the calculation: keep
+        # their order, so that the line follows it.
+        return points
+
+    def close_plot_window(self):
+        """Drop the references when the user closes the DRDH plot window."""
+        for attr in ("plot_objects", "save_plot_button",
+                     "save_data_button", "show_table_button",
+                     "load_album_data_button",
+                     "delete_album_data_button",
+                     "interpolate_album_button",
+                     "remove_interpolation_button"):
+            if hasattr(self, attr):
+                delattr(self, attr)
+
+        self.close_table_window()
+
+        if hasattr(self, "plot_window"):
+            win = self.plot_window
+            del self.plot_window
+            win.destroy()
+
+    def draw_plot(self):
+        """(Re)draw the plot. Silently does nothing if it is closed."""
+        if not (
+            hasattr(self, "plot_objects")
+            and hasattr(self, "plot_window")
+            and self.widget_alive(self.plot_window)
+        ):
+            return
+
+        fig = self.plot_objects["fig"]
+
+        # Rebuilding the axes also drops the group rulers of the previous draw
+        fig.clear()
+        ax = fig.add_subplot(111)
+
+        n_rulers = max(len(self.moving_order), 1)
+        fig.subplots_adjust(
+            bottom=0.10 + DRDH_PLOT['RULER_GAP'] * n_rulers,
+            left=0.11, right=0.97, top=0.95
+        )
+
+        offsets = self.get_group_offsets()
+
+        points = self.get_points()
+
+        # Calculated curve loaded with "Load album data" (may be absent).
+        # It is placed here, not when loaded, because the axis depends on the
+        # overlap, which may be changed later.
+        album_points = self.get_album_points()
+
+        # The rulers stop at 100 %, but a group may physically go a bit
+        # further (e.g. 103.66 %), so the axis still has to show such points.
+        ruler_start = min(offsets.values()) if offsets else 0.0
+        ruler_end = (
+            (max(offsets.values()) if offsets else 0.0)
+            + DRDH_PLOT['RULER_MAX']
+        )
+        u_min = min([ruler_start] + [p["u"] for p in points + album_points])
+        u_max = max([ruler_end] + [p["u"] for p in points + album_points])
+
+        # Below the experiment (zorder 4 and 5), so that it never hides it
+        if album_points:
+            album_xs, album_ys = self.album_line(album_points)
+
+            ax.plot(
+                album_xs,
+                album_ys,
+                color=DRDH_PLOT.get('ALBUM_COLOR', "#2E7D32"),
+                linewidth=DRDH_PLOT.get('ALBUM_WIDTH', 1.6),
+                marker='o',
+                markersize=DRDH_PLOT.get('ALBUM_POINT_SIZE', 3),
+                label="Album data",
+                zorder=3
+            )
+
+        # The album curve taken at the measured steps ("Interpolate")
+        interpolated = self.get_interpolated_album_points(
+            points, album_points
+        )
+
+        if interpolated:
+            ax.plot(
+                [p["u"] for p in interpolated],
+                [p["value"] for p in interpolated],
+                linestyle='none',
+                marker='D',
+                markersize=DRDH_PLOT.get('ALBUM_INTERP_SIZE', 5),
+                markerfacecolor='white',
+                markeredgecolor=DRDH_PLOT.get('ALBUM_COLOR', "#2E7D32"),
+                markeredgewidth=1.3,
+                label="Album data (interpolated)",
+                zorder=3
+            )
+
+        if points:
+            us = np.array([p["u"] for p in points])
+            ys = np.array([p["value"] for p in points])
+            errs = np.array([
+                (p["sigma"] or 0.0) * DRDH_ERROR['SIGMA_FACTOR']
+                for p in points
+            ])
+
+            ax.plot(
+                us, ys,
+                color=DRDH_PLOT['LINE_COLOR'],
+                linewidth=DRDH_PLOT['LINE_WIDTH'],
+                zorder=4
+            )
+            if self.config["errors"]:
+                ax.errorbar(
+                    us, ys, yerr=errs,
+                    fmt='o',
+                    color=DRDH_PLOT['POINT_COLOR'],
+                    markersize=DRDH_PLOT['POINT_SIZE'],
+                    ecolor=DRDH_PLOT['ERROR_COLOR'],
+                    elinewidth=DRDH_PLOT['ERROR_WIDTH'],
+                    capsize=DRDH_PLOT['ERROR_CAPSIZE'],
+                    capthick=DRDH_PLOT['ERROR_WIDTH'],
+                    linestyle='none',
+                    label="Experiment",
+                    zorder=5
+                )
+            else:
+                ax.plot(
+                    us, ys,
+                    marker='o',
+                    color=DRDH_PLOT['POINT_COLOR'],
+                    markersize=DRDH_PLOT['POINT_SIZE'],
+                    linestyle='none',
+                    label="Experiment",
+                    zorder=5
+                )
+
+        # The vertical range has to hold both the experiment and the album
+        tops, bottoms = [], []
+
+        if points:
+            tops.append(float(np.max(ys + errs)))
+            bottoms.append(float(np.min(ys - errs)))
+
+        if album_points:
+            album_values = [p["value"] for p in album_points]
+            tops.append(max(album_values))
+            bottoms.append(min(album_values))
+
+        if tops:
+            top = max(tops)
+            bottom = min(bottoms)
+            margin = 0.12 * max(top - bottom, 1e-9)
+            ax.set_ylim(min(0.0, bottom - margin), top + margin)
+            ax.legend(frameon=True, loc="best")
+
+        ax.set_ylabel(
+            self.config["y_label"], fontsize=PLOT['PLOT_LABEL_SIZE']
+        )
+        ax.set_xlim(u_min - 3, u_max + 3)
+        ax.grid(
+            True,
+            color=DRDH_PLOT['GRID_COLOR'],
+            linewidth=DRDH_PLOT['GRID_WIDTH']
+        )
+        ax.set_axisbelow(True)
+
+        for spine in ("top", "right"):
+            ax.spines[spine].set_visible(False)
+
+        # The common axis itself is meaningless for the user - only the
+        # per-group rulers below it are.
+        ax.xaxis.set_visible(False)
+
+        self.draw_group_rulers(ax, offsets)
+
+        self.plot_objects["canvas"].draw_idle()
+
+        # Every change of the data or of the overlap lands here, so the
+        # table follows it
+        self.refresh_table_window()
+
+    def draw_group_rulers(self, ax, offsets):
+        """
+        One 0..100 % ruler per moving group, in the order the groups start
+        moving, each shifted by the overlap (see get_group_offsets), so that
+        the handover point of two groups falls on the same vertical line.
+        """
+        step = DRDH_PLOT['RULER_STEP']
+        gap = DRDH_PLOT['RULER_GAP']
+
+        top = DRDH_PLOT['RULER_MAX']
+
+        for k, gi in enumerate(self.moving_order):
+            off = offsets[gi]
+
+            ruler = ax.secondary_xaxis(
+                -gap * (k + 1),
+                functions=(
+                    lambda u, o=off: u - o,
+                    lambda p, o=off: p + o
+                )
+            )
+            ruler.set_xticks(np.arange(0, top + 1, step))
+            ruler.spines["bottom"].set_bounds(0, top)
+            ruler.tick_params(labelsize=7, length=3)
+            ruler.set_xlabel(
+                self.Group_names[gi],
+                labelpad=-26,
+                x=-0.02,
+                ha="right",
+                fontsize=8,
+                fontweight="bold"
+            )
