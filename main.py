@@ -307,7 +307,7 @@ class Main:
             message_label = tk.Label(
                 frame,
                 text="File is not loaded yet",
-                font=COLORS['TITLE_FONT'],
+                font=FONTS['TITLE_FONT'],
             )
             message_label.pack(expand=True)
             return

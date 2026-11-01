@@ -21,7 +21,7 @@ MESSAGES: dict[str, dict[str, str | dict[str, str]]] = {
     "BETA_ERROR": {
         "title": "Beta Error",
         "text": (
-            "Failed to get Beta:\n{error}."
+            "Failed to get Beta:\n{error}. "
             "Beta should be positive integer or float value"
         )
     },
@@ -29,7 +29,7 @@ MESSAGES: dict[str, dict[str, str | dict[str, str]]] = {
     "VALUE_POSTIVE": {
         "title": "{value} Error",
         "text": (
-            "Failed to get {value}."
+            "Failed to get {value}. "
             "{value} should be {sign} integer or float value"
         )
     },
@@ -40,12 +40,12 @@ MESSAGES: dict[str, dict[str, str | dict[str, str]]] = {
         "text": {
             "single": (
                 "This required parameter is missing: "
-                "{param}\n\nPlease enter this parameter"
+                "{param}\n\nPlease enter this parameter "
                 "before starting {test} processing."
             ),
             "multiple": (
                 "The following required parameters are missing:"
-                "\n\n{params}\n\nPlease provide these parameters"
+                "\n\n{params}\n\nPlease provide these parameters "
                 "before starting {test} processing."
             )
         }
@@ -85,7 +85,7 @@ MESSAGES: dict[str, dict[str, str | dict[str, str]]] = {
         "title": "Data format error",
         "text": (
             "Column '{col}' comprises invalid value:\n\n"
-            "{value}\nPlease adjust the data in compliance"
+            "{value}\nPlease adjust the data in compliance "
             "with the expected format."
         )
     },
@@ -137,35 +137,31 @@ MESSAGES: dict[str, dict[str, str | dict[str, str]]] = {
     "PCR_ZERO_POWER": {
         "title": "Zero power",
         "text": (
-            "The computed power N(t1) is zero, so the coefficient cannot "
-            "be determined. Check the base and the t1 point."
+            "The computed power N(t1) equals to zero, thus the coefficient cannot "
+            "be determined. Please verify the base and the t1 point."
         )
     },
 
     "PCR_SAME_POSITION": {
         "title": "Same group position",
         "text": (
-            "The group is at the same position for the RCPS base as for the "
-            "points after the reactivity was added.\n"
-            "The positions are expected to differ. This may lead to an "
-            "incorrect result.\n\n"
-            "Yes - keep the current clicks and proceed.\n"
-            "No - discard all clicks and start this procedure over."
+            "The group position remains the same.\n"
+            "Yes - keep and proceed.\n"
+            "No - select another point."
         )
     },
 
     "PCR_HEADER_NOT_FOUND": {
         "title": "Column not found",
         "text": (
-            "The new file does not contain the following column(s) used "
-            "for the current parameters:\n\n{headers}\n\n"
-            "The file was not loaded. Check that it has the same headers."
+            "The new file does not contain the following column(s) :"
+            "\n\n{headers}\n\n"
         )
     },
 
     "PCR_FILE_ERROR": {
         "title": "File error",
-        "text": "The selected file could not be read."
+        "text": "The selected file might not be read."
     },
 
     "SYM_NO_FILE": {
@@ -190,7 +186,7 @@ MESSAGES: dict[str, dict[str, str | dict[str, str]]] = {
         "title": "One current channel",
         "text": (
             "Two current channels are expected, but only one was given.\n"
-            "Continue anyway?"
+            "Shall we proceed?"
         )
     },
 
